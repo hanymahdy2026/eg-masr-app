@@ -30,25 +30,26 @@ const Map appTranslations = {
     'personal': 'حساب شخصي',
     'company': 'حساب شركات',
     'name': 'الاسم بالكامل',
-    'contact': 'البريد الإلكتروني (Gmail) أو رقم الهاتف',
-    'sendOtp': 'إرسال كود التفعيل (6 أرقام)',
-    'enterOtp': 'أدخل كود التفعيل (6 أرقام)',
+    'contact': 'رقم الهاتف أو البريد الإلكتروني (Gmail)',
+    'sendOtp': 'إرسال كود التفعيل (4 أرقام)',
+    'enterOtp': 'أدخل كود التفعيل (4 أرقام)',
     'verify': 'تأكيد الدخول',
-    'companyName': 'اسم الشركة',
-    'address': 'عنوان الشركة',
-    'plotNumber': 'رقم القطعة',
+    'companyName': 'اسم المنشأة / الشركة',
+    'companyPhone': 'رقم المنشأة',
+    'address': 'عنوان المنشأة',
     'taxReg': 'رقم التسجيل الضريبي',
     'managerName': 'اسم المسؤول',
-    'registerCompany': 'تسجيل الشركة',
+    'registerCompany': 'تسجيل المنشأة',
     'pendingApproval': 'طلبك قيد المراجعة من الإدارة',
-    'chats': 'المحادثات',
+    'chats': 'المحادثات والجروبات',
     'contacts': 'جهات الاتصال',
-    'myQr': 'الباركود الخاص بي',
-    'admin': 'لوحة الأدمن',
-    'publicChat': 'المحادثة العامة (EG Masr)',
-    'typeMsg': 'اكتب رسالة أو رابط...',
-    'approve': 'قبول',
-    'reject': 'رفض',
+    'myQr': 'الباركود',
+    'admin': 'الأدمن',
+    'newGroup': 'إنشاء جروب جديد',
+    'groupName': 'اسم الجروب',
+    'selectMembers': 'اختر الأعضاء',
+    'create': 'إنشاء',
+    'typeMsg': 'اكتب رسالة بالعربي أو الإنجليزي أو رابط...',
     'logout': 'تسجيل خروج',
   },
   'en': {
@@ -56,51 +57,29 @@ const Map appTranslations = {
     'personal': 'Personal Account',
     'company': 'Company Account',
     'name': 'Full Name',
-    'contact': 'Email (Gmail) or Phone Number',
-    'sendOtp': 'Send 6-Digit Code',
-    'enterOtp': 'Enter 6-Digit Code',
+    'contact': 'Phone Number or Email (Gmail)',
+    'sendOtp': 'Send 4-Digit Code',
+    'enterOtp': 'Enter 4-Digit Code',
     'verify': 'Verify & Login',
-    'companyName': 'Company Name',
-    'address': 'Company Address',
-    'plotNumber': 'Plot Number',
+    'companyName': 'Company / Facility Name',
+    'companyPhone': 'Facility Phone Number',
+    'address': 'Address',
     'taxReg': 'Tax Registration Number',
     'managerName': 'Manager Name',
     'registerCompany': 'Register Company',
     'pendingApproval': 'Your company is pending admin approval',
-    'chats': 'Chats',
+    'chats': 'Chats & Groups',
     'contacts': 'Contacts',
-    'myQr': 'My QR Code',
-    'admin': 'Admin Panel',
-    'publicChat': 'Public Chat (EG Masr)',
+    'myQr': 'My QR',
+    'admin': 'Admin',
+    'newGroup': 'Create New Group',
+    'groupName': 'Group Name',
+    'selectMembers': 'Select Members',
+    'create': 'Create',
     'typeMsg': 'Type a message or link...',
-    'approve': 'Approve',
-    'reject': 'Reject',
     'logout': 'Logout',
   },
 };
-
-const List supportedLanguages = [
-  {'code': 'ar', 'name': 'العربية'},
-  {'code': 'en', 'name': 'English'},
-  {'code': 'fr', 'name': 'Français'},
-  {'code': 'de', 'name': 'Deutsch'},
-  {'code': 'es', 'name': 'Español'},
-  {'code': 'it', 'name': 'Italiano'},
-  {'code': 'tr', 'name': 'Türkçe'},
-  {'code': 'ru', 'name': 'Русский'},
-  {'code': 'zh', 'name': '中文'},
-  {'code': 'ja', 'name': '日本語'},
-  {'code': 'ko', 'name': '한국어'},
-  {'code': 'hi', 'name': 'हिन्दी'},
-  {'code': 'ur', 'name': 'اردو'},
-  {'code': 'pt', 'name': 'Português'},
-  {'code': 'nl', 'name': 'Nederlands'},
-  {'code': 'pl', 'name': 'Polski'},
-  {'code': 'sv', 'name': 'Svenska'},
-  {'code': 'el', 'name': 'Ελληνικά'},
-  {'code': 'id', 'name': 'Bahasa Indonesia'},
-  {'code': 'ms', 'name': 'Bahasa Melayu'},
-];
 
 class EgMasrApp extends StatefulWidget {
   const EgMasrApp({super.key});
@@ -131,23 +110,21 @@ class _EgMasrAppState extends State<EgMasrApp> {
           .select()
           .eq('contact_info', savedContact)
           .maybeSingle();
-      if (user != null) {
-        setState(() => _currentUser = user);
-      }
+      if (user != null) setState(() => _currentUser = user);
     }
     setState(() => _loading = false);
   }
 
-  Future<void> _changeLang(String code) async {
+  Future<void> _toggleLang() async {
+    final next = _lang == 'ar' ? 'en' : 'ar';
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('lang', code);
-    setState(() => _lang = code);
+    await prefs.setString('lang', next);
+    setState(() => _lang = next);
   }
 
   String tr(String key) {
     final map = appTranslations[_lang] as Map?;
-    final enMap = appTranslations['en'] as Map?;
-    return (map?[key] ?? enMap?[key] ?? key).toString();
+    return (map?[key] ?? key).toString();
   }
 
   @override
@@ -156,7 +133,7 @@ class _EgMasrAppState extends State<EgMasrApp> {
       debugShowCheckedModeBanner: false,
       title: 'EG Masr',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF0D47A1)),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF075E54)),
         useMaterial3: true,
       ),
       home: _loading
@@ -164,7 +141,7 @@ class _EgMasrAppState extends State<EgMasrApp> {
           : _currentUser == null
               ? AuthScreen(
                   lang: _lang,
-                  onLangChanged: _changeLang,
+                  onToggleLang: _toggleLang,
                   tr: tr,
                   onLoginSuccess: (user) async {
                     final prefs = await SharedPreferences.getInstance();
@@ -175,7 +152,7 @@ class _EgMasrAppState extends State<EgMasrApp> {
               : HomeScreen(
                   user: _currentUser!,
                   lang: _lang,
-                  onLangChanged: _changeLang,
+                  onToggleLang: _toggleLang,
                   tr: tr,
                   onLogout: () async {
                     final prefs = await SharedPreferences.getInstance();
@@ -189,14 +166,14 @@ class _EgMasrAppState extends State<EgMasrApp> {
 
 class AuthScreen extends StatefulWidget {
   final String lang;
-  final Function(String) onLangChanged;
+  final VoidCallback onToggleLang;
   final String Function(String) tr;
   final Function(Map) onLoginSuccess;
 
   const AuthScreen({
     super.key,
     required this.lang,
-    required this.onLangChanged,
+    required this.onToggleLang,
     required this.tr,
     required this.onLoginSuccess,
   });
@@ -214,11 +191,10 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
   String _generatedOtp = '';
 
   final _compNameCtrl = TextEditingController();
+  final _compPhoneCtrl = TextEditingController();
   final _addressCtrl = TextEditingController();
-  final _plotCtrl = TextEditingController();
   final _taxCtrl = TextEditingController();
   final _managerCtrl = TextEditingController();
-  final _compContactCtrl = TextEditingController();
 
   @override
   void initState() {
@@ -228,13 +204,16 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
 
   void _sendCode() {
     if (_nameCtrl.text.trim().isEmpty || _contactCtrl.text.trim().isEmpty) return;
-    final code = (100000 + (DateTime.now().millisecondsSinceEpoch % 900000)).toString();
+    final code = (1000 + (DateTime.now().millisecondsSinceEpoch % 9000)).toString();
     setState(() {
       _generatedOtp = code;
       _otpSent = true;
     });
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('كود التفعيل الخاص بك: $code'), duration: const Duration(seconds: 10)),
+      SnackBar(
+        content: Text('كود التفعيل المكون من 4 أرقام: $code'),
+        duration: const Duration(seconds: 15),
+      ),
     );
   }
 
@@ -247,15 +226,14 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
     }
     final contact = _contactCtrl.text.trim().toLowerCase();
     final isAdmin = contact == adminEmail.toLowerCase();
-    final data = {
-      'full_name': _nameCtrl.text.trim(),
-      'contact_info': contact,
-      'account_type': 'personal',
-      'is_admin': isAdmin,
-    };
     final res = await supabase
         .from('users_profiles')
-        .upsert(data, onConflict: 'contact_info')
+        .upsert({
+          'full_name': _nameCtrl.text.trim(),
+          'contact_info': contact,
+          'account_type': 'personal',
+          'is_admin': isAdmin,
+        }, onConflict: 'contact_info')
         .select()
         .single();
     widget.onLoginSuccess(res);
@@ -263,17 +241,16 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
 
   Future<void> _registerCompany() async {
     if (_compNameCtrl.text.isEmpty ||
+        _compPhoneCtrl.text.isEmpty ||
         _addressCtrl.text.isEmpty ||
-        _plotCtrl.text.isEmpty ||
         _taxCtrl.text.isEmpty ||
-        _managerCtrl.text.isEmpty ||
-        _compContactCtrl.text.isEmpty) {
+        _managerCtrl.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('برجاء ملء جميع بيانات الشركة')),
+        const SnackBar(content: Text('برجاء إدخال جميع بيانات المنشأة')),
       );
       return;
     }
-    final contact = _compContactCtrl.text.trim().toLowerCase();
+    final contact = _compPhoneCtrl.text.trim().toLowerCase();
     final existing = await supabase
         .from('companies')
         .select()
@@ -304,7 +281,7 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
     await supabase.from('companies').insert({
       'company_name': _compNameCtrl.text.trim(),
       'address': _addressCtrl.text.trim(),
-      'plot_number': _plotCtrl.text.trim(),
+      'plot_number': _compPhoneCtrl.text.trim(),
       'tax_reg_number': _taxCtrl.text.trim(),
       'manager_name': _managerCtrl.text.trim(),
       'contact_info': contact,
@@ -324,18 +301,9 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
       appBar: AppBar(
         title: Text(widget.tr('appName')),
         actions: [
-          DropdownButton<String>(
-            value: widget.lang,
-            underline: const SizedBox(),
-            items: supportedLanguages
-                .map((l) => DropdownMenuItem<String>(
-                      value: l['code'].toString(),
-                      child: Text(l['name'].toString()),
-                    ))
-                .toList(),
-            onChanged: (v) {
-              if (v != null) widget.onLangChanged(v);
-            },
+          TextButton(
+            onPressed: widget.onToggleLang,
+            child: Text(widget.lang == 'ar' ? 'English' : 'عربي', style: const TextStyle(fontWeight: FontWeight.bold)),
           ),
         ],
         bottom: TabBar(
@@ -363,7 +331,7 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
                   TextField(
                     controller: _otpCtrl,
                     keyboardType: TextInputType.number,
-                    maxLength: 6,
+                    maxLength: 4,
                     decoration: InputDecoration(labelText: widget.tr('enterOtp')),
                   ),
                   const SizedBox(height: 12),
@@ -377,11 +345,10 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
             child: Column(
               children: [
                 TextField(controller: _compNameCtrl, decoration: InputDecoration(labelText: widget.tr('companyName'))),
+                TextField(controller: _compPhoneCtrl, decoration: InputDecoration(labelText: widget.tr('companyPhone'))),
                 TextField(controller: _addressCtrl, decoration: InputDecoration(labelText: widget.tr('address'))),
-                TextField(controller: _plotCtrl, decoration: InputDecoration(labelText: widget.tr('plotNumber'))),
                 TextField(controller: _taxCtrl, decoration: InputDecoration(labelText: widget.tr('taxReg'))),
                 TextField(controller: _managerCtrl, decoration: InputDecoration(labelText: widget.tr('managerName'))),
-                TextField(controller: _compContactCtrl, decoration: InputDecoration(labelText: widget.tr('contact'))),
                 const SizedBox(height: 16),
                 ElevatedButton(onPressed: _registerCompany, child: Text(widget.tr('registerCompany'))),
               ],
@@ -396,7 +363,7 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
 class HomeScreen extends StatefulWidget {
   final Map user;
   final String lang;
-  final Function(String) onLangChanged;
+  final VoidCallback onToggleLang;
   final String Function(String) tr;
   final VoidCallback onLogout;
 
@@ -404,7 +371,7 @@ class HomeScreen extends StatefulWidget {
     super.key,
     required this.user,
     required this.lang,
-    required this.onLangChanged,
+    required this.onToggleLang,
     required this.tr,
     required this.onLogout,
   });
@@ -422,7 +389,7 @@ class _HomeScreenState extends State<HomeScreen> {
         widget.user['contact_info'].toString().toLowerCase() == adminEmail.toLowerCase();
 
     final pages = [
-      ChatScreen(user: widget.user, receiverContact: null, title: widget.tr('publicChat'), tr: widget.tr),
+      ChatsAndGroupsTab(user: widget.user, tr: widget.tr),
       ContactsScreen(user: widget.user, tr: widget.tr),
       QrScreen(user: widget.user, tr: widget.tr),
       if (isAdmin) AdminScreen(tr: widget.tr),
@@ -430,20 +397,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('${widget.tr('appName')} - ${widget.user['full_name']}'),
+        title: Text('${widget.tr('appName')} -${widget.user['full_name']}'),
         actions: [
-          DropdownButton<String>(
-            value: widget.lang,
-            underline: const SizedBox(),
-            items: supportedLanguages
-                .map((l) => DropdownMenuItem<String>(
-                      value: l['code'].toString(),
-                      child: Text(l['name'].toString()),
-                    ))
-                .toList(),
-            onChanged: (v) {
-              if (v != null) widget.onLangChanged(v);
-            },
+          TextButton(
+            onPressed: widget.onToggleLang,
+            child: Text(widget.lang == 'ar' ? 'EN' : 'عربي', style: const TextStyle(fontWeight: FontWeight.bold)),
           ),
           IconButton(icon: const Icon(Icons.logout), onPressed: widget.onLogout),
         ],
@@ -459,115 +417,3 @@ class _HomeScreenState extends State<HomeScreen> {
           if (isAdmin) NavigationDestination(icon: const Icon(Icons.admin_panel_settings), label: widget.tr('admin')),
         ],
       ),
-    );
-  }
-}
-
-class ChatScreen extends StatefulWidget {
-  final Map user;
-  final String? receiverContact;
-  final String title;
-  final String Function(String) tr;
-
-  const ChatScreen({
-    super.key,
-    required this.user,
-    required this.receiverContact,
-    required this.title,
-    required this.tr,
-  });
-
-  @override
-  State<ChatScreen> createState() => _ChatScreenState();
-}
-
-class _ChatScreenState extends State<ChatScreen> {
-  final _msgCtrl = TextEditingController();
-  final _picker = ImagePicker();
-  final _recorder = AudioRecorder();
-  final _player = AudioPlayer();
-  bool _isRecording = false;
-  List _messages = [];
-  Timer? _timer;
-
-  @override
-  void initState() {
-    super.initState();
-    _fetchMessages();
-    _timer = Timer.periodic(const Duration(seconds: 3), (_) => _fetchMessages());
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    _recorder.dispose();
-    _player.dispose();
-    super.dispose();
-  }
-
-  Future<void> _fetchMessages() async {
-    final res = await supabase.from('messages').select().order('created_at', ascending: true);
-    final myContact = widget.user['contact_info'];
-    final target = widget.receiverContact;
-
-    final filtered = List.from(res).where((m) {
-      if (target == null) {
-        return m['receiver_contact'] == null || m['receiver_contact'] == '';
-      } else {
-        return (m['sender_contact'] == myContact && m['receiver_contact'] == target) ||
-            (m['sender_contact'] == target && m['receiver_contact'] == myContact);
-      }
-    }).toList();
-
-    if (mounted) setState(() => _messages = filtered);
-  }
-
-  Future<void> _sendMessage({String type = 'text', String? content, String? mediaUrl}) async {
-    final text = content ?? _msgCtrl.text.trim();
-    if (text.isEmpty && mediaUrl == null) return;
-    _msgCtrl.clear();
-
-    await supabase.from('messages').insert({
-      'sender_name': widget.user['full_name'],
-      'sender_contact': widget.user['contact_info'],
-      'receiver_contact': widget.receiverContact,
-      'content': text,
-      'msg_type': type,
-      'media_url': mediaUrl,
-    });
-    _fetchMessages();
-  }
-
-  Future<void> _pickAndUpload(bool isVideo) async {
-    final file = isVideo
-        ? await _picker.pickVideo(source: ImageSource.gallery)
-        : await _picker.pickImage(source: ImageSource.gallery);
-    if (file == null) return;
-
-    final bytes = await file.readAsBytes();
-    final ext = file.name.split('.').last;
-    final path = '${DateTime.now().millisecondsSinceEpoch}.$ext';
-
-    await supabase.storage.from('chat_media').uploadBinary(path, bytes);
-    final url = supabase.storage.from('chat_media').getPublicUrl(path);
-    await _sendMessage(type: isVideo ? 'video' : 'image', content: isVideo ? 'فيديو' : 'صورة', mediaUrl: url);
-  }
-
-  Future<void> _toggleAudio() async {
-    if (_isRecording) {
-      final path = await _recorder.stop();
-      setState(() => _isRecording = false);
-      if (path != null) {
-        final bytes = await File(path).readAsBytes();
-        final fileName = '${DateTime.now().millisecondsSinceEpoch}.m4a';
-        await supabase.storage.from('chat_media').uploadBinary(fileName, bytes);
-        final url = supabase.storage.from('chat_media').getPublicUrl(fileName);
-        await _sendMessage(type: 'audio', content: 'رسالة صوتية', mediaUrl: url);
-      }
-    } else {
-      if (await _recorder.hasPermission()) {
-        final dir = await getTemporaryDirectory();
-        await _recorder.start(const RecordConfig(), path: '${dir.path}/rec.m4a');
-        setState(() => _isRecording = true);
-      }
-    }
