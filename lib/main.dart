@@ -430,7 +430,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('${widget.tr('appName')} -${widget.user['full_name']}'),
+        title: Text('${widget.tr('appName')} - ${widget.user['full_name']}'),
         actions: [
           DropdownButton<String>(
             value: widget.lang,
@@ -810,3 +810,26 @@ class _AdminScreenState extends State<AdminScreen> {
         final c = _companies[i];
         return Card(
           child: ListTile(
+            title: Text(c['company_name'] ?? ''),
+            subtitle: Text(
+              'المسؤول: ${c['manager_name']}\nالعنوان: ${c['address']} - قطعة: ${c['plot_number']}\nالضريبي: ${c['tax_reg_number']}\nالحالة: ${c['status']}',
+            ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.check_circle, color: Colors.green),
+                  onPressed: () => _updateStatus(c['id'], 'approved'),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.cancel, color: Colors.red),
+                  onPressed: () => _updateStatus(c['id'], 'rejected'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
