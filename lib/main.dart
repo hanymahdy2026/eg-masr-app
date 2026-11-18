@@ -24,7 +24,7 @@ Future<void> main() async {
 
 final supabase = Supabase.instance.client;
 
-const Map appTranslations = {
+const Map<String, Map<String, String>> appTranslations = {
   'ar': {
     'appName': 'EG Masr',
     'personal': 'حساب شخصي',
@@ -89,7 +89,7 @@ class EgMasrApp extends StatefulWidget {
 
 class _EgMasrAppState extends State<EgMasrApp> {
   String _lang = 'ar';
-  Map? _currentUser;
+  Map<String, dynamic>? _currentUser;
   bool _loading = true;
 
   @override
@@ -122,10 +122,7 @@ class _EgMasrAppState extends State<EgMasrApp> {
     setState(() => _lang = next);
   }
 
-  String tr(String key) {
-    final map = appTranslations[_lang] as Map?;
-    return (map?[key] ?? key).toString();
-  }
+  String tr(String key) => appTranslations[_lang]?[key] ?? key;
 
   @override
   Widget build(BuildContext context) {
@@ -145,7 +142,7 @@ class _EgMasrAppState extends State<EgMasrApp> {
                   tr: tr,
                   onLoginSuccess: (user) async {
                     final prefs = await SharedPreferences.getInstance();
-                    await prefs.setString('user_contact', user['contact_info']);
+                    await prefs.setString('user_contact', user['contact_info'].toString());
                     setState(() => _currentUser = user);
                   },
                 )
@@ -168,7 +165,7 @@ class AuthScreen extends StatefulWidget {
   final String lang;
   final VoidCallback onToggleLang;
   final String Function(String) tr;
-  final Function(Map) onLoginSuccess;
+  final Function(Map<String, dynamic>) onLoginSuccess;
 
   const AuthScreen({
     super.key,
@@ -271,9 +268,11 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
             .single();
         widget.onLoginSuccess(user);
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(widget.tr('pendingApproval'))),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(widget.tr('pendingApproval'))),
+          );
+        }
       }
       return;
     }
@@ -303,7 +302,10 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
         actions: [
           TextButton(
             onPressed: widget.onToggleLang,
-            child: Text(widget.lang == 'ar' ? 'English' : 'عربي', style: const TextStyle(fontWeight: FontWeight.bold)),
+            child: Text(
+              widget.lang == 'ar' ? 'English' : 'عربي',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
           ),
         ],
         bottom: TabBar(
@@ -361,7 +363,7 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
 }
 
 class HomeScreen extends StatefulWidget {
-  final Map user;
+  final Map<String, dynamic> user;
   final String lang;
   final VoidCallback onToggleLang;
   final String Function(String) tr;
@@ -388,7 +390,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final isAdmin = widget.user['is_admin'] == true ||
         widget.user['contact_info'].toString().toLowerCase() == adminEmail.toLowerCase();
 
-    final pages = [
+    final pages = <Widget>[
       ChatsAndGroupsTab(user: widget.user, tr: widget.tr),
       ContactsScreen(user: widget.user, tr: widget.tr),
       QrScreen(user: widget.user, tr: widget.tr),
@@ -397,11 +399,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('${widget.tr('appName')} -${widget.user['full_name']}'),
+        title: Text('${widget.tr('appName')} - ${widget.user['full_name']}'),
         actions: [
           TextButton(
             onPressed: widget.onToggleLang,
-            child: Text(widget.lang == 'ar' ? 'EN' : 'عربي', style: const TextStyle(fontWeight: FontWeight.bold)),
+            child: Text(
+              widget.lang == 'ar' ? 'EN' : 'عربي',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
           ),
           IconButton(icon: const Icon(Icons.logout), onPressed: widget.onLogout),
         ],
@@ -417,3 +422,558 @@ class _HomeScreenState extends State<HomeScreen> {
           if (isAdmin) NavigationDestination(icon: const Icon(Icons.admin_panel_settings), label: widget.tr('admin')),
         ],
       ),
+    );
+  }
+}
+
+class ChatsAndGroupsTab extends StatefulWidget {
+  final Map<String, dynamic> user;
+  final String Function(String) tr;
+
+  const ChatsAndGroupsTab({super.key, required this.user, required this.tr});
+
+  @override
+  State<ChatsAndGroupsTab> createState() => _ChatsAndGroupsTabState();
+}
+
+class _ChatsAndGroupsTabState extends State<ChatsAndGroupsTab> {
+  List<dynamic> _groups = [];
+  List<dynamic> _users = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final myContact = widget.user['contact_info'];
+    final gRes = await supabase.from('groups').select().order('created_at', ascending: false);
+    final uRes = await supabase.from('users_profiles').select();
+    final myGroups = List.from(gRes).where((g) {
+      final members = List<String>.from(g['members'] ?? []);
+      return members.contains(myContact) || g['created_by'] == myContact;
+    }).toList();
+
+    if (mounted) {
+      setState(() {
+        _groups = myGroups;
+        _users = List.from(uRes).where((u) => u['contact_info'] != myContact).toList();
+      });
+    }
+  }
+
+  Future<void> _showCreateGroupDialog() async {
+    final nameCtrl = TextEditingController();
+    final selected = <String>{widget.user['contact_info'].toString()};
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(widget.tr('newGroup')),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(controller: nameCtrl, decoration: InputDecoration(labelText: widget.tr('groupName'))),
+                const SizedBox(height: 10),
+                Text(widget.tr('selectMembers'), style: const TextStyle(fontWeight: FontWeight.bold)),
+                SizedBox(
+                  height: 200,
+                  child: ListView(
+                    children: _users.map((u) {
+                      final contact = u['contact_info'].toString();
+                      return CheckboxListTile(
+                        title: Text(u['full_name']?.toString() ?? ''),
+                        subtitle: Text(contact),
+                        value: selected.contains(contact),
+                        onChanged: (val) {
+                          setDialogState(() {
+                            if (val == true) {
+                              selected.add(contact);
+                            } else {
+                              selected.remove(contact);
+                            }
+                          });
+                        },
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+            ElevatedButton(
+              onPressed: () async {
+                if (nameCtrl.text.trim().isEmpty) return;
+                await supabase.from('groups').insert({
+                  'group_name': nameCtrl.text.trim(),
+                  'created_by': widget.user['contact_info'],
+                  'members': selected.toList(),
+                });
+                if (ctx.mounted) Navigator.pop(ctx);
+                _load();
+              },
+              child: Text(widget.tr('create')),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _showCreateGroupDialog,
+        icon: const Icon(Icons.group_add),
+        label: Text(widget.tr('newGroup')),
+      ),
+      body: ListView(
+        children: [
+          if (_groups.isNotEmpty) ...[
+            const Padding(
+              padding: EdgeInsets.all(12),
+              child: Text('الجروبات (Groups)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            ),
+            ..._groups.map((g) => ListTile(
+                  leading: const CircleAvatar(backgroundColor: Colors.teal, child: Icon(Icons.groups, color: Colors.white)),
+                  title: Text(g['group_name']?.toString() ?? ''),
+                  subtitle: Text('${(g['members'] as List).length} أعضاء'),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ChatScreen(
+                        user: widget.user,
+                        chatId: 'group_${g['id']}',
+                        title: g['group_name'].toString(),
+                        tr: widget.tr,
+                      ),
+                    ),
+                  ),
+                )),
+            const Divider(),
+          ],
+          const Padding(
+            padding: EdgeInsets.all(12),
+            child: Text('المحادثات الفردية (1 to 1)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          ),
+          ..._users.map((u) => ListTile(
+                leading: const CircleAvatar(child: Icon(Icons.person)),
+                title: Text(u['full_name']?.toString() ?? ''),
+                subtitle: Text(u['contact_info']?.toString() ?? ''),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ChatScreen(
+                      user: widget.user,
+                      chatId: u['contact_info'].toString(),
+                      title: u['full_name'].toString(),
+                      tr: widget.tr,
+                    ),
+                  ),
+                ),
+              )),
+        ],
+      ),
+    );
+  }
+}
+
+class ChatScreen extends StatefulWidget {
+  final Map<String, dynamic> user;
+  final String chatId;
+  final String title;
+  final String Function(String) tr;
+
+  const ChatScreen({
+    super.key,
+    required this.user,
+    required this.chatId,
+    required this.title,
+    required this.tr,
+  });
+
+  @override
+  State<ChatScreen> createState() => _ChatScreenState();
+}
+
+class _ChatScreenState extends State<ChatScreen> {
+  final _msgCtrl = TextEditingController();
+  final _picker = ImagePicker();
+  final _recorder = AudioRecorder();
+  final _player = AudioPlayer();
+  bool _isRecording = false;
+  List<dynamic> _messages = [];
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchMessages();
+    _timer = Timer.periodic(const Duration(seconds: 3), (_) => _fetchMessages());
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _recorder.dispose();
+    _player.dispose();
+    super.dispose();
+  }
+
+  Future<void> _fetchMessages() async {
+    final res = await supabase.from('messages').select().order('created_at', ascending: true);
+    final myContact = widget.user['contact_info'];
+    final target = widget.chatId;
+
+    final filtered = List.from(res).where((m) {
+      if (target.startsWith('group_')) {
+        return m['receiver_contact'] == target;
+      } else {
+        return (m['sender_contact'] == myContact && m['receiver_contact'] == target) ||
+            (m['sender_contact'] == target && m['receiver_contact'] == myContact);
+      }
+    }).toList();
+
+    if (mounted) setState(() => _messages = filtered);
+  }
+
+  Future<void> _sendMessage({String type = 'text', String? content, String? mediaUrl}) async {
+    final text = content ?? _msgCtrl.text.trim();
+    if (text.isEmpty && mediaUrl == null) return;
+    _msgCtrl.clear();
+
+    await supabase.from('messages').insert({
+      'sender_name': widget.user['full_name'],
+      'sender_contact': widget.user['contact_info'],
+      'receiver_contact': widget.chatId,
+      'content': text,
+      'msg_type': type,
+      'media_url': mediaUrl,
+    });
+    _fetchMessages();
+  }
+
+  Future<void> _pickAndUpload(bool isVideo) async {
+    final file = isVideo
+        ? await _picker.pickVideo(source: ImageSource.gallery)
+        : await _picker.pickImage(source: ImageSource.gallery);
+    if (file == null) return;
+
+    final bytes = await file.readAsBytes();
+    final ext = file.name.split('.').last;
+    final path = '${DateTime.now().millisecondsSinceEpoch}.$ext';
+
+    await supabase.storage.from('chat_media').uploadBinary(path, bytes);
+    final url = supabase.storage.from('chat_media').getPublicUrl(path);
+    await _sendMessage(type: isVideo ? 'video' : 'image', content: isVideo ? 'فيديو' : 'صورة', mediaUrl: url);
+  }
+
+  Future<void> _toggleAudio() async {
+    if (_isRecording) {
+      final path = await _recorder.stop();
+      setState(() => _isRecording = false);
+      if (path != null) {
+        final bytes = await File(path).readAsBytes();
+        final fileName = '${DateTime.now().millisecondsSinceEpoch}.m4a';
+        await supabase.storage.from('chat_media').uploadBinary(fileName, bytes);
+        final url = supabase.storage.from('chat_media').getPublicUrl(fileName);
+        await _sendMessage(type: 'audio', content: 'رسالة صوتية', mediaUrl: url);
+      }
+    } else {
+      if (await _recorder.hasPermission()) {
+        final dir = await getTemporaryDirectory();
+        await _recorder.start(const RecordConfig(), path: '${dir.path}/rec.m4a');
+        setState(() => _isRecording = true);
+      }
+    }
+  }
+
+  Future<void> _sendLocation() async {
+    LocationPermission perm = await Geolocator.checkPermission();
+    if (perm == LocationPermission.denied) {
+      perm = await Geolocator.requestPermission();
+    }
+    if (perm == LocationPermission.deniedForever) return;
+    final pos = await Geolocator.getCurrentPosition();
+    final url = 'https://maps.google.com/?q=${pos.latitude},${pos.longitude}';
+    await _sendMessage(type: 'location', content: 'موقعي الجغرافي', mediaUrl: url);
+  }
+
+  Future<void> _startCall(bool isVideo) async {
+    final room = 'EGMasr_${widget.chatId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '')}';
+    final callUrl = isVideo
+        ? 'https://meet.jit.si/$room'
+        : 'https://meet.jit.si/$room#config.startWithVideoMuted=true';
+    await _sendMessage(
+      type: 'call',
+      content: isVideo ? 'مكالمة فيديو مباشرة - اضغط للانضمام' : 'مكالمة صوتية مباشرة - اضغط للانضمام',
+      mediaUrl: callUrl,
+    );
+    await launchUrl(Uri.parse(callUrl), mode: LaunchMode.externalApplication);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.title),
+        actions: [
+          IconButton(icon: const Icon(Icons.call), onPressed: () => _startCall(false)),
+          IconButton(icon: const Icon(Icons.videocam), onPressed: () => _startCall(true)),
+        ],
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.all(12),
+              itemCount: _messages.length,
+              itemBuilder: (context, i) {
+                final m = _messages[i];
+                final isMe = m['sender_contact'] == widget.user['contact_info'];
+                final type = m['msg_type'] ?? 'text';
+                final url = m['media_url']?.toString();
+
+                return Align(
+                  alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                  child: Card(
+                    color: isMe ? const Color(0xFFDCF8C6) : Colors.white,
+                    child: Padding(
+                      padding: const EdgeInsets.all(10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            m['sender_name']?.toString() ?? '',
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.teal),
+                          ),
+                          const SizedBox(height: 4),
+                          if (type == 'image' && url != null)
+                            Image.network(url, width: 200, height: 200, fit: BoxFit.cover)
+                          else if (type == 'audio' && url != null)
+                            IconButton(
+                              icon: const Icon(Icons.play_circle_fill, size: 32, color: Colors.teal),
+                              onPressed: () => _player.play(UrlSource(url)),
+                            )
+                          else if ((type == 'video' || type == 'location' || type == 'call') && url != null)
+                            InkWell(
+                              onTap: () => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+                              child: Text(
+                                '${m['content']}',
+                                style: const TextStyle(color: Colors.blue, fontWeight: FontWeight.bold, decoration: TextDecoration.underline),
+                              ),
+                            )
+                          else
+                            InkWell(
+                              onTap: () {
+                                final txt = m['content'].toString();
+                                if (txt.startsWith('http')) launchUrl(Uri.parse(txt), mode: LaunchMode.externalApplication);
+                              },
+                              child: Text(m['content']?.toString() ?? ''),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: Row(
+              children: [
+                IconButton(icon: const Icon(Icons.image), onPressed: () => _pickAndUpload(false)),
+                IconButton(icon: const Icon(Icons.video_library), onPressed: () => _pickAndUpload(true)),
+                IconButton(icon: const Icon(Icons.location_on), onPressed: _sendLocation),
+                IconButton(
+                  icon: Icon(_isRecording ? Icons.stop : Icons.mic, color: _isRecording ? Colors.red : null),
+                  onPressed: _toggleAudio,
+                ),
+                Expanded(
+                  child: TextField(
+                    controller: _msgCtrl,
+                    decoration: InputDecoration(hintText: widget.tr('typeMsg')),
+                  ),
+                ),
+                IconButton(icon: const Icon(Icons.send), onPressed: () => _sendMessage()),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class ContactsScreen extends StatefulWidget {
+  final Map<String, dynamic> user;
+  final String Function(String) tr;
+
+  const ContactsScreen({super.key, required this.user, required this.tr});
+
+  @override
+  State<ContactsScreen> createState() => _ContactsScreenState();
+}
+
+class _ContactsScreenState extends State<ContactsScreen> {
+  List<dynamic> _users = [];
+  List<Contact> _phoneContacts = [];
+  String _search = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    final res = await supabase.from('users_profiles').select();
+    if (mounted) setState(() => _users = List.from(res));
+
+    if (await FlutterContacts.requestPermission()) {
+      final contacts = await FlutterContacts.getContacts(withProperties: true);
+      if (mounted) setState(() => _phoneContacts = contacts);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final filteredUsers = _users.where((u) {
+      final q = _search.toLowerCase();
+      return u['full_name'].toString().toLowerCase().contains(q) ||
+          u['contact_info'].toString().toLowerCase().contains(q);
+    }).toList();
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(8),
+          child: TextField(
+            decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'بحث بالاسم أو الرقم...'),
+            onChanged: (v) => setState(() => _search = v),
+          ),
+        ),
+        Expanded(
+          child: ListView(
+            children: [
+              ...filteredUsers.map((u) => ListTile(
+                    leading: const CircleAvatar(child: Icon(Icons.person)),
+                    title: Text(u['full_name']?.toString() ?? ''),
+                    subtitle: Text(u['contact_info']?.toString() ?? ''),
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ChatScreen(
+                          user: widget.user,
+                          chatId: u['contact_info'].toString(),
+                          title: u['full_name'].toString(),
+                          tr: widget.tr,
+                        ),
+                      ),
+                    ),
+                  )),
+              const Divider(),
+              ..._phoneContacts
+                  .where((c) => c.displayName.toLowerCase().contains(_search.toLowerCase()))
+                  .map((c) => ListTile(
+                        leading: const CircleAvatar(child: Icon(Icons.phone)),
+                        title: Text(c.displayName),
+                        subtitle: Text(c.phones.isNotEmpty ? c.phones.first.number : ''),
+                      )),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class QrScreen extends StatelessWidget {
+  final Map<String, dynamic> user;
+  final String Function(String) tr;
+
+  const QrScreen({super.key, required this.user, required this.tr});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          QrImageView(data: 'egmasr:${user['contact_info']}', size: 240),
+          const SizedBox(height: 16),
+          Text(user['full_name']?.toString() ?? '', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+          Text(user['contact_info']?.toString() ?? ''),
+        ],
+      ),
+    );
+  }
+}
+
+class AdminScreen extends StatefulWidget {
+  final String Function(String) tr;
+  const AdminScreen({super.key, required this.tr});
+
+  @override
+  State<AdminScreen> createState() => _AdminScreenState();
+}
+
+class _AdminScreenState extends State<AdminScreen> {
+  List<dynamic> _companies = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCompanies();
+  }
+
+  Future<void> _loadCompanies() async {
+    final res = await supabase.from('companies').select().order('created_at', ascending: false);
+    if (mounted) setState(() => _companies = List.from(res));
+  }
+
+  Future<void> _updateStatus(String id, String status) async {
+    await supabase.from('companies').update({'status': status}).eq('id', id);
+    _loadCompanies();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView.builder(
+      padding: const EdgeInsets.all(12),
+      itemCount: _companies.length,
+      itemBuilder: (context, i) {
+        final c = _companies[i];
+        return Card(
+          child: ListTile(
+            title: Text(c['company_name']?.toString() ?? ''),
+            subtitle: Text(
+              'المسؤول: ${c['manager_name']}\nرقم المنشأة: ${c['plot_number']}\nالعنوان: ${c['address']}\nالضريبي: ${c['tax_reg_number']}\nالحالة: ${c['status']}',
+            ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.check_circle, color: Colors.green),
+                  onPressed: () => _updateStatus(c['id'].toString(), 'approved'),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.cancel, color: Colors.red),
+                  onPressed: () => _updateStatus(c['id'].toString(), 'rejected'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
