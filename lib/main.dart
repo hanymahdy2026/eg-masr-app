@@ -339,3 +339,474 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
           ),
         ],
         bottom: TabBar(
+          controller: _tabController,
+          tabs: [
+            Tab(text: widget.tr('personal')),
+            Tab(text: widget.tr('company')),
+          ],
+        ),
+      ),
+      body: TabBarView(
+        controller: _tabController,
+        children: [
+          SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                TextField(controller: _nameCtrl, decoration: InputDecoration(labelText: widget.tr('name'))),
+                const SizedBox(height: 12),
+                TextField(controller: _contactCtrl, decoration: InputDecoration(labelText: widget.tr('contact'))),
+                const SizedBox(height: 16),
+                if (!_otpSent)
+                  ElevatedButton(onPressed: _sendCode, child: Text(widget.tr('sendOtp')))
+                else ...[
+                  TextField(
+                    controller: _otpCtrl,
+                    keyboardType: TextInputType.number,
+                    maxLength: 6,
+                    decoration: InputDecoration(labelText: widget.tr('enterOtp')),
+                  ),
+                  const SizedBox(height: 12),
+                  ElevatedButton(onPressed: _verifyPersonal, child: Text(widget.tr('verify'))),
+                ],
+              ],
+            ),
+          ),
+          SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                TextField(controller: _compNameCtrl, decoration: InputDecoration(labelText: widget.tr('companyName'))),
+                TextField(controller: _addressCtrl, decoration: InputDecoration(labelText: widget.tr('address'))),
+                TextField(controller: _plotCtrl, decoration: InputDecoration(labelText: widget.tr('plotNumber'))),
+                TextField(controller: _taxCtrl, decoration: InputDecoration(labelText: widget.tr('taxReg'))),
+                TextField(controller: _managerCtrl, decoration: InputDecoration(labelText: widget.tr('managerName'))),
+                TextField(controller: _compContactCtrl, decoration: InputDecoration(labelText: widget.tr('contact'))),
+                const SizedBox(height: 16),
+                ElevatedButton(onPressed: _registerCompany, child: Text(widget.tr('registerCompany'))),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class HomeScreen extends StatefulWidget {
+  final Map user;
+  final String lang;
+  final Function(String) onLangChanged;
+  final String Function(String) tr;
+  final VoidCallback onLogout;
+
+  const HomeScreen({
+    super.key,
+    required this.user,
+    required this.lang,
+    required this.onLangChanged,
+    required this.tr,
+    required this.onLogout,
+  });
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  int _index = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final isAdmin = widget.user['is_admin'] == true ||
+        widget.user['contact_info'].toString().toLowerCase() == adminEmail.toLowerCase();
+
+    final pages = [
+      ChatScreen(user: widget.user, receiverContact: null, title: widget.tr('publicChat'), tr: widget.tr),
+      ContactsScreen(user: widget.user, tr: widget.tr),
+      QrScreen(user: widget.user, tr: widget.tr),
+      if (isAdmin) AdminScreen(tr: widget.tr),
+    ];
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('${widget.tr('appName')} -${widget.user['full_name']}'),
+        actions: [
+          DropdownButton<String>(
+            value: widget.lang,
+            underline: const SizedBox(),
+            items: supportedLanguages
+                .map((l) => DropdownMenuItem<String>(
+                      value: l['code'].toString(),
+                      child: Text(l['name'].toString()),
+                    ))
+                .toList(),
+            onChanged: (v) {
+              if (v != null) widget.onLangChanged(v);
+            },
+          ),
+          IconButton(icon: const Icon(Icons.logout), onPressed: widget.onLogout),
+        ],
+      ),
+      body: pages[_index],
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _index,
+        onDestinationSelected: (i) => setState(() => _index = i),
+        destinations: [
+          NavigationDestination(icon: const Icon(Icons.chat), label: widget.tr('chats')),
+          NavigationDestination(icon: const Icon(Icons.contacts), label: widget.tr('contacts')),
+          NavigationDestination(icon: const Icon(Icons.qr_code), label: widget.tr('myQr')),
+          if (isAdmin) NavigationDestination(icon: const Icon(Icons.admin_panel_settings), label: widget.tr('admin')),
+        ],
+      ),
+    );
+  }
+}
+
+class ChatScreen extends StatefulWidget {
+  final Map user;
+  final String? receiverContact;
+  final String title;
+  final String Function(String) tr;
+
+  const ChatScreen({
+    super.key,
+    required this.user,
+    required this.receiverContact,
+    required this.title,
+    required this.tr,
+  });
+
+  @override
+  State<ChatScreen> createState() => _ChatScreenState();
+}
+
+class _ChatScreenState extends State<ChatScreen> {
+  final _msgCtrl = TextEditingController();
+  final _picker = ImagePicker();
+  final _recorder = AudioRecorder();
+  final _player = AudioPlayer();
+  bool _isRecording = false;
+  List _messages = [];
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchMessages();
+    _timer = Timer.periodic(const Duration(seconds: 3), (_) => _fetchMessages());
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _recorder.dispose();
+    _player.dispose();
+    super.dispose();
+  }
+
+  Future<void> _fetchMessages() async {
+    final res = await supabase.from('messages').select().order('created_at', ascending: true);
+    final myContact = widget.user['contact_info'];
+    final target = widget.receiverContact;
+
+    final filtered = List.from(res).where((m) {
+      if (target == null) {
+        return m['receiver_contact'] == null || m['receiver_contact'] == '';
+      } else {
+        return (m['sender_contact'] == myContact && m['receiver_contact'] == target) ||
+            (m['sender_contact'] == target && m['receiver_contact'] == myContact);
+      }
+    }).toList();
+
+    if (mounted) setState(() => _messages = filtered);
+  }
+
+  Future<void> _sendMessage({String type = 'text', String? content, String? mediaUrl}) async {
+    final text = content ?? _msgCtrl.text.trim();
+    if (text.isEmpty && mediaUrl == null) return;
+    _msgCtrl.clear();
+
+    await supabase.from('messages').insert({
+      'sender_name': widget.user['full_name'],
+      'sender_contact': widget.user['contact_info'],
+      'receiver_contact': widget.receiverContact,
+      'content': text,
+      'msg_type': type,
+      'media_url': mediaUrl,
+    });
+    _fetchMessages();
+  }
+
+  Future<void> _pickAndUpload(bool isVideo) async {
+    final file = isVideo
+        ? await _picker.pickVideo(source: ImageSource.gallery)
+        : await _picker.pickImage(source: ImageSource.gallery);
+    if (file == null) return;
+
+    final bytes = await file.readAsBytes();
+    final ext = file.name.split('.').last;
+    final path = '${DateTime.now().millisecondsSinceEpoch}.$ext';
+
+    await supabase.storage.from('chat_media').uploadBinary(path, bytes);
+    final url = supabase.storage.from('chat_media').getPublicUrl(path);
+    await _sendMessage(type: isVideo ? 'video' : 'image', content: isVideo ? 'فيديو' : 'صورة', mediaUrl: url);
+  }
+
+  Future<void> _toggleAudio() async {
+    if (_isRecording) {
+      final path = await _recorder.stop();
+      setState(() => _isRecording = false);
+      if (path != null) {
+        final bytes = await File(path).readAsBytes();
+        final fileName = '${DateTime.now().millisecondsSinceEpoch}.m4a';
+        await supabase.storage.from('chat_media').uploadBinary(fileName, bytes);
+        final url = supabase.storage.from('chat_media').getPublicUrl(fileName);
+        await _sendMessage(type: 'audio', content: 'رسالة صوتية', mediaUrl: url);
+      }
+    } else {
+      if (await _recorder.hasPermission()) {
+        final dir = await getTemporaryDirectory();
+        await _recorder.start(const RecordConfig(), path: '${dir.path}/rec.m4a');
+        setState(() => _isRecording = true);
+      }
+    }
+  }
+
+  Future<void> _sendLocation() async {
+    LocationPermission perm = await Geolocator.checkPermission();
+    if (perm == LocationPermission.denied) {
+      perm = await Geolocator.requestPermission();
+    }
+    if (perm == LocationPermission.deniedForever) return;
+    final pos = await Geolocator.getCurrentPosition();
+    final url = 'https://maps.google.com/?q=${pos.latitude},${pos.longitude}';
+    await _sendMessage(type: 'location', content: 'موقعي الجغرافي', mediaUrl: url);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: widget.receiverContact != null ? AppBar(title: Text(widget.title)) : null,
+      body: Column(
+        children: [
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.all(12),
+              itemCount: _messages.length,
+              itemBuilder: (context, i) {
+                final m = _messages[i];
+                final isMe = m['sender_contact'] == widget.user['contact_info'];
+                final type = m['msg_type'] ?? 'text';
+                final url = m['media_url'];
+
+                return Align(
+                  alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                  child: Card(
+                    color: isMe ? Colors.blue.shade100 : Colors.grey.shade200,
+                    child: Padding(
+                      padding: const EdgeInsets.all(10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(m['sender_name'] ?? '', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                          const SizedBox(height: 4),
+                          if (type == 'image' && url != null)
+                            Image.network(url, width: 200, height: 200, fit: BoxFit.cover)
+                          else if (type == 'audio' && url != null)
+                            IconButton(
+                              icon: const Icon(Icons.play_arrow),
+                              onPressed: () => _player.play(UrlSource(url)),
+                            )
+                          else if ((type == 'video' || type == 'location') && url != null)
+                            InkWell(
+                              onTap: () => launchUrl(Uri.parse(url)),
+                              child: Text('${m['content']} (اضغط للفتح)', style: const TextStyle(color: Colors.blue, decoration: TextDecoration.underline)),
+                            )
+                          else
+                            InkWell(
+                              onTap: () {
+                                final txt = m['content'].toString();
+                                if (txt.startsWith('http')) launchUrl(Uri.parse(txt));
+                              },
+                              child: Text(m['content'] ?? ''),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: Row(
+              children: [
+                IconButton(icon: const Icon(Icons.image), onPressed: () => _pickAndUpload(false)),
+                IconButton(icon: const Icon(Icons.videocam), onPressed: () => _pickAndUpload(true)),
+                IconButton(icon: const Icon(Icons.location_on), onPressed: _sendLocation),
+                IconButton(
+                  icon: Icon(_isRecording ? Icons.stop : Icons.mic, color: _isRecording ? Colors.red : null),
+                  onPressed: _toggleAudio,
+                ),
+                Expanded(
+                  child: TextField(
+                    controller: _msgCtrl,
+                    decoration: InputDecoration(hintText: widget.tr('typeMsg')),
+                  ),
+                ),
+                IconButton(icon: const Icon(Icons.send), onPressed: () => _sendMessage()),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class ContactsScreen extends StatefulWidget {
+  final Map user;
+  final String Function(String) tr;
+
+  const ContactsScreen({super.key, required this.user, required this.tr});
+
+  @override
+  State<ContactsScreen> createState() => _ContactsScreenState();
+}
+
+class _ContactsScreenState extends State<ContactsScreen> {
+  List _users = [];
+  List<Contact> _phoneContacts = [];
+  String _search = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    final res = await supabase.from('users_profiles').select();
+    setState(() => _users = List.from(res));
+
+    if (await FlutterContacts.requestPermission()) {
+      final contacts = await FlutterContacts.getContacts(withProperties: true);
+      if (mounted) setState(() => _phoneContacts = contacts);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final filteredUsers = _users.where((u) {
+      final q = _search.toLowerCase();
+      return u['full_name'].toString().toLowerCase().contains(q) ||
+          u['contact_info'].toString().toLowerCase().contains(q);
+    }).toList();
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(8),
+          child: TextField(
+            decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'بحث بالاسم أو الرقم...'),
+            onChanged: (v) => setState(() => _search = v),
+          ),
+        ),
+        Expanded(
+          child: ListView(
+            children: [
+              ...filteredUsers.map((u) => ListTile(
+                    leading: const CircleAvatar(child: Icon(Icons.person)),
+                    title: Text(u['full_name'] ?? ''),
+                    subtitle: Text(u['contact_info'] ?? ''),
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ChatScreen(
+                          user: widget.user,
+                          receiverContact: u['contact_info'],
+                          title: u['full_name'],
+                          tr: widget.tr,
+                        ),
+                      ),
+                    ),
+                  )),
+              const Divider(),
+              ..._phoneContacts
+                  .where((c) => c.displayName.toLowerCase().contains(_search.toLowerCase()))
+                  .map((c) => ListTile(
+                        leading: const CircleAvatar(child: Icon(Icons.phone)),
+                        title: Text(c.displayName),
+                        subtitle: Text(c.phones.isNotEmpty ? c.phones.first.number : ''),
+                      )),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class QrScreen extends StatelessWidget {
+  final Map user;
+  final String Function(String) tr;
+
+  const QrScreen({super.key, required this.user, required this.tr});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          QrImageView(
+            data: 'egmasr:${user['contact_info']}',
+            size: 240,
+          ),
+          const SizedBox(height: 16),
+          Text(user['full_name'] ?? '', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+          Text(user['contact_info'] ?? ''),
+        ],
+      ),
+    );
+  }
+}
+
+class AdminScreen extends StatefulWidget {
+  final String Function(String) tr;
+  const AdminScreen({super.key, required this.tr});
+
+  @override
+  State<AdminScreen> createState() => _AdminScreenState();
+}
+
+class _AdminScreenState extends State<AdminScreen> {
+  List _companies = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCompanies();
+  }
+
+  Future<void> _loadCompanies() async {
+    final res = await supabase.from('companies').select().order('created_at', ascending: false);
+    if (mounted) setState(() => _companies = List.from(res));
+  }
+
+  Future<void> _updateStatus(String id, String status) async {
+    await supabase.from('companies').update({'status': status}).eq('id', id);
+    _loadCompanies();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView.builder(
+      padding: const EdgeInsets.all(12),
+      itemCount: _companies.length,
+      itemBuilder: (context, i) {
+        final c = _companies[i];
+        return Card(
+          child: ListTile(
