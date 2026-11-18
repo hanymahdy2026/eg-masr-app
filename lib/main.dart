@@ -110,7 +110,7 @@ class EgMasrApp extends StatefulWidget {
 
 class _EgMasrAppState extends State<EgMasrApp> {
   String _lang = 'ar';
-  Map<String, dynamic>? _currentUser;
+  Map? _currentUser;
   bool _loading = true;
 
   @override
@@ -191,7 +191,7 @@ class AuthScreen extends StatefulWidget {
   final String lang;
   final Function(String) onLangChanged;
   final String Function(String) tr;
-  final Function(Map<String, dynamic>) onLoginSuccess;
+  final Function(Map) onLoginSuccess;
 
   const AuthScreen({
     super.key,
@@ -391,7 +391,7 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
 }
 
 class HomeScreen extends StatefulWidget {
-  final Map<String, dynamic> user;
+  final Map user;
   final String lang;
   final Function(String) onLangChanged;
   final String Function(String) tr;
@@ -458,7 +458,7 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 class ChatScreen extends StatefulWidget {
-  final Map<String, dynamic> user;
+  final Map user;
   final String? receiverContact;
   final String title;
   final String Function(String) tr;
@@ -481,7 +481,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final _recorder = AudioRecorder();
   final _player = AudioPlayer();
   bool _isRecording = false;
-  List> _messages = [];
+  List _messages = [];
   Timer? _timer;
 
   @override
@@ -504,7 +504,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final myContact = widget.user['contact_info'];
     final target = widget.receiverContact;
 
-    final filtered = List>.from(res).where((m) {
+    final filtered = List.from(res).where((m) {
       if (target == null) {
         return m['receiver_contact'] == null || m['receiver_contact'] == '';
       } else {
@@ -661,7 +661,7 @@ class _ChatScreenState extends State<ChatScreen> {
 }
 
 class ContactsScreen extends StatefulWidget {
-  final Map<String, dynamic> user;
+  final Map user;
   final String Function(String) tr;
 
   const ContactsScreen({super.key, required this.user, required this.tr});
@@ -671,7 +671,7 @@ class ContactsScreen extends StatefulWidget {
 }
 
 class _ContactsScreenState extends State<ContactsScreen> {
-  List> _users = [];
+  List _users = [];
   List<Contact> _phoneContacts = [];
   String _search = '';
 
@@ -683,7 +683,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
   Future<void> _loadData() async {
     final res = await supabase.from('users_profiles').select();
-    setState(() => _users = List>.from(res));
+    setState(() => _users = List.from(res));
 
     if (await FlutterContacts.requestPermission()) {
       final contacts = await FlutterContacts.getContacts(withProperties: true);
@@ -744,7 +744,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
 }
 
 class QrScreen extends StatelessWidget {
-  final Map<String, dynamic> user;
+  final Map user;
   final String Function(String) tr;
 
   const QrScreen({super.key, required this.user, required this.tr});
@@ -777,7 +777,7 @@ class AdminScreen extends StatefulWidget {
 }
 
 class _AdminScreenState extends State<AdminScreen> {
-  List> _companies = [];
+  List _companies = [];
 
   @override
   void initState() {
@@ -787,7 +787,7 @@ class _AdminScreenState extends State<AdminScreen> {
 
   Future<void> _loadCompanies() async {
     final res = await supabase.from('companies').select().order('created_at', ascending: false);
-    if (mounted) setState(() => _companies = List>.from(res));
+    if (mounted) setState(() => _companies = List.from(res));
   }
 
   Future<void> _updateStatus(String id, String status) async {
