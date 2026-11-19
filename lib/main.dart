@@ -7,7 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 const String supabaseUrl = 'https://bdbdimphbrsezftindck.supabase.co';
-const String supabaseAnonKey = Publishable key
+const String supabaseAnonKey = sb_publishable_Zik6vfMWUdxgdws1wrshjg_GeiJiqcq
 const String adminEmail = 'h27n4y200@gmail.com';
 
 Future<void> main() async {
