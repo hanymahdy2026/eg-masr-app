@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -37,19 +36,19 @@ class _EgMasrSuperAppState extends State<EgMasrSuperApp> {
   }
 
   Future<void> _loadSession() async {
-    final prefs = await SharedPreferences.getInstance();
-    final savedContact = prefs.getString('user_contact');
-    if (savedContact != null) {
-      final res = await supabase
-          .from('users_profiles')
-          .select()
-          .eq('contact_info', savedContact)
-          .maybeSingle();
-      if (res != null) {
-        currentUser = res;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedContact = prefs.getString('user_contact');
+      if (savedContact != null) {
+        final res = await supabase
+            .from('users_profiles')
+            .select()
+            .eq('contact_info', savedContact)
+            .maybeSingle();
+        if (res != null) currentUser = res;
       }
-    }
-    setState(() => loading = false);
+    } catch (_) {}
+    if (mounted) setState(() => loading = false);
   }
 
   void _toggleLang() => setState(() => lang = lang == 'ar' ? 'en' : 'ar');
@@ -482,8 +481,8 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
     if (mounted) setState(() => msgs = filtered);
   }
 
-  Future<void> _send({String type = 'text', String? overrideText}) async {
-    final text = overrideText ?? _msgCtrl.text.trim();
+  Future<void> _send() async {
+    final text = _msgCtrl.text.trim();
     if (text.isEmpty) return;
     _msgCtrl.clear();
     await supabase.from('messages').insert({
@@ -491,19 +490,9 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
       'sender_contact': widget.currentUser['contact_info'],
       'receiver_contact': widget.targetId,
       'content': text,
-      'msg_type': type,
+      'msg_type': 'text',
     });
     _fetch();
-  }
-
-  Future<void> _pickMedia(bool isVideo) async {
-    final picker = ImagePicker();
-    final file = isVideo
-        ? await picker.pickVideo(source: ImageSource.gallery)
-        : await picker.pickImage(source: ImageSource.gallery);
-    if (file != null) {
-      _send(type: isVideo ? 'video' : 'image', overrideText: '${isVideo ? "🎥 فيديو" : "🖼️ صورة"}: ${file.name}');
-    }
   }
 
   @override
@@ -559,8 +548,6 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
             padding: const EdgeInsets.all(8),
             child: Row(
               children: [
-                IconButton(icon: const Icon(Icons.image, color: Color(0xFF07C160)), onPressed: () => _pickMedia(false)),
-                IconButton(icon: const Icon(Icons.videocam, color: Color(0xFF07C160)), onPressed: () => _pickMedia(true)),
                 Expanded(
                   child: TextField(
                     controller: _msgCtrl,
@@ -571,7 +558,7 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
                     ),
                   ),
                 ),
-                IconButton(icon: const Icon(Icons.send, color: Color(0xFF07C160)), onPressed: () => _send()),
+                IconButton(icon: const Icon(Icons.send, color: Color(0xFF07C160)), onPressed: _send),
               ],
             ),
           )
@@ -644,7 +631,7 @@ class _MomentsTabState extends State<MomentsTab> {
         backgroundColor: const Color(0xFF07C160),
         foregroundColor: Colors.white,
         onPressed: _newPostDialog,
-        child: const Icon(Icons.add_a_photo),
+        child: const Icon(Icons.edit),
       ),
       body: RefreshIndicator(
         onRefresh: _loadMoments,
