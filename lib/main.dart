@@ -7,7 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 const String supabaseUrl = 'https://bdbdimphbrsezftindck.supabase.co';
-sb_publishable_Zik6vfMWUdxgdws1wrshjg_GeiJiqcq
+const String supabaseAnonKey = Publishable key
 const String adminEmail = 'h27n4y200@gmail.com';
 
 Future<void> main() async {
@@ -189,7 +189,7 @@ class _AuthScreenState extends State<AuthScreen> {
             const Icon(Icons.public, size: 72, color: Color(0xFF07C160)),
             const SizedBox(height: 12),
             Text(
-              isAr ? 'منصة مصر الشاملة (شبيه WeChat)' : 'EG Masr Super App',
+              isAr ? 'منصة مصر الشاملة' : 'EG Masr Super App',
               style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 24),
