@@ -20,13 +20,20 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Prepare Android Project & SDK
+      - name: Prepare Android Project & Force SDK 36
         run: |
           flutter create --platforms=android .
-          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/g' android/app/build.gradle.kts || true
-          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/g' android/app/build.gradle || true
-          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle.kts || true
-          sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/g' android/app/build.gradle || true
+          python3 -c '
+          import glob
+          for path in glob.glob("android/app/build.gradle*"):
+              with open(path, "r") as f:
+                  s = f.read()
+              s = s.replace("flutter.compileSdkVersion", "36")
+              s = s.replace("flutter.minSdkVersion", "24")
+              s = s.replace("flutter.targetSdkVersion", "35")
+              with open(path, "w") as f:
+                  f.write(s)
+          '
           sed -i 's/<application/<uses-permission android:name="android.permission.INTERNET"\/>\n    <uses-permission android:name="android.permission.CAMERA"\/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"\/>\n    <uses-permission android:name="android.permission.READ_CONTACTS"\/>\n    <application/' android/app/src/main/AndroidManifest.xml
 
       - name: Build APK
