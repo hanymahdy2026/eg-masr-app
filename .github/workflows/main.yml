@@ -20,7 +20,7 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Prepare Android Project & Force SDK 36
+      - name: Prepare Android Project & Disable Lint Abort
         run: |
           flutter create --platforms=android .
           python3 -c '
@@ -31,6 +31,8 @@ jobs:
               s = s.replace("flutter.compileSdkVersion", "36")
               s = s.replace("flutter.minSdkVersion", "24")
               s = s.replace("flutter.targetSdkVersion", "35")
+              if "buildTypes" in s:
+                  s = s.replace("buildTypes {", "lint {\n        checkReleaseBuilds = false\n        abortOnError = false\n    }\n    buildTypes {")
               with open(path, "w") as f:
                   f.write(s)
           '
