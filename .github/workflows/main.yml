@@ -1,51 +1,53 @@
-name: Build EG Masr APK
-
+name: Build EG Masr Android & iOS
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:
 
 jobs:
-  build:
+  build-android:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
-
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.29.0'
           channel: 'stable'
-
       - name: Prepare Android Project
         run: |
-          flutter create --platforms=android .
-          python3 -c '
-          import glob
-          for path in glob.glob("android/app/build.gradle*"):
-              with open(path, "r") as f:
-                  s = f.read()
-              s = s.replace("flutter.compileSdkVersion", "35")
-              s = s.replace("flutter.minSdkVersion", "24")
-              s = s.replace("flutter.targetSdkVersion", "35")
-              if "buildTypes" in s:
-                  s = s.replace("buildTypes {", "lint {\n        checkReleaseBuilds = false\n        abortOnError = false\n    }\n    buildTypes {")
-              with open(path, "w") as f:
-                  f.write(s)
-          '
-          sed -i 's/<application/<uses-permission android:name="android.permission.INTERNET"\/>\n    <uses-permission android:name="android.permission.CAMERA"\/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"\/>\n    <uses-permission android:name="android.permission.READ_CONTACTS"\/>\n    <application/' android/app/src/main/AndroidManifest.xml
-
-      - name: Build APK
-        run: |
+          flutter create . --platforms=android
           flutter pub get
-          flutter build apk --release
-
-      - name: Upload APK
+      - name: Build APK
+        run: flutter build apk --release --no-tree-shake-icons
+      - name: Upload Android APK
         uses: actions/upload-artifact@v4
         with:
-          name: eg-masr-super-app-v2
+          name: eg-masr-android-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.29.0'
+          channel: 'stable'
+      - name: Prepare iOS Project
+        run: |
+          flutter create . --platforms=ios
+          flutter pub get
+      - name: Build iOS App (No Codesign)
+        run: flutter build ios --release --no-codesign --no-tree-shake-icons
+      - name: Package & Upload iOS IPA
+        run: |
+          mkdir -p Payload
+          cp -r build/ios/iphoneos/Runner.app Payload/
+          zip -r eg-masr-ios.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eg-masr-iphone-ipa
+          path: eg-masr-ios.ipa
