@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:geolocator/geolocator.dart';
 
 const String supabaseUrl = 'https://bdbdimphbrsezftindck.supabase.co';
 const String supabaseAnonKey =
@@ -102,7 +103,7 @@ class _AuthGateState extends State {
 }
 
 // ============================================================================
-// 1. LOGIN SCREEN (DYNAMIC OTP + INDIVIDUAL & CORPORATE)
+// 1. LOGIN SCREEN (REAL SMS OTP VIA SUPABASE PHONE AUTH + CORPORATE)
 // ============================================================================
 class LoginScreen extends StatefulWidget {
   final Function(String, String) onLoginSuccess;
@@ -123,7 +124,6 @@ class _LoginScreenState extends State {
   final _otpCtrl = TextEditingController();
   bool _otpSent = false;
   bool _busy = false;
-  String _dynamicOtp = '';
 
   LoginScreen get w => widget as LoginScreen;
 
@@ -137,7 +137,15 @@ class _LoginScreenState extends State {
     return p;
   }
 
-  Future _sendOtp() async {
+  String _toInternationalEgypt(String localPhone) {
+    final norm = _normalizePhone(localPhone);
+    if (norm.startsWith('0')) {
+      return '+20${norm.substring(1)}';
+    }
+    return '+20$norm';
+  }
+
+  Future _sendRealSmsOtp() async {
     final phone = _normalizePhone(_phoneCtrl.text.trim());
     if (phone.length < 11) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -158,50 +166,57 @@ class _LoginScreenState extends State {
       }
     }
 
-    final newCode = (100000 + Random.secure().nextInt(900000)).toString();
-    setState(() {
-      _dynamicOtp = newCode;
-      _otpSent = true;
-      _otpCtrl.clear();
-    });
+    setState(() => _busy = true);
+    final intlPhone = _toInternationalEgypt(phone);
 
-    if (mounted) {
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Row(
-            children: [
-              Icon(Icons.sms, color: Color(0xFF006A4E)),
-              SizedBox(width: 8),
-              Text('كود التحقق (OTP)'),
-            ],
+    try {
+      await supabase.auth.signInWithOtp(phone: intlPhone);
+      setState(() {
+        _otpSent = true;
+        _otpCtrl.clear();
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('تم إرسال رسالة نصية SMS بكود التفعيل إلى $phone 📩'),
+            backgroundColor: const Color(0xFF006A4E),
           ),
-          content: Text(
-            'كود الدخول المتغير الخاص برقم $phone هو:\n\n$newCode',
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+                'تعذر إرسال SMS: تأكد من تفعيل مزود Phone/Twilio في Supabase ($e)'),
+            backgroundColor: Colors.red,
           ),
-          actions: [
-            ElevatedButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('تم'),
-            ),
-          ],
-        ),
-      );
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future _verifyAndEnter() async {
+  Future _verifySmsAndEnter() async {
     final phone = _normalizePhone(_phoneCtrl.text.trim());
-    if (_otpCtrl.text.trim() != _dynamicOtp || _dynamicOtp.isEmpty) {
+    final code = _otpCtrl.text.trim();
+    if (code.length < 4) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('كود التفعيل غير صحيح!')),
+        const SnackBar(content: Text('أدخل الكود المرسل في الرسالة النصية')),
       );
       return;
     }
     setState(() => _busy = true);
+    final intlPhone = _toInternationalEgypt(phone);
 
     try {
+      await supabase.auth.verifyOTP(
+        phone: intlPhone,
+        token: code,
+        type: OtpType.sms,
+      );
+
       if (_isCorporate) {
         final existingComp = await supabase
             .from('companies')
@@ -294,8 +309,13 @@ class _LoginScreenState extends State {
         w.onLoginSuccess(phone, 'individual');
       }
     } catch (e) {
-      if (!_isCorporate || phone == adminPhoneNumber) {
-        w.onLoginSuccess(phone, _isCorporate ? 'corporate' : 'individual');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('كود الرسالة النصية غير صحيح أو منتهي الصلاحية!'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -435,8 +455,8 @@ class _LoginScreenState extends State {
                         controller: _otpCtrl,
                         keyboardType: TextInputType.number,
                         decoration: InputDecoration(
-                          labelText: 'أدخل الكود المتغير المرسل',
-                          prefixIcon: const Icon(Icons.lock_outline),
+                          labelText: 'كود التفعيل المرسل في رسالة SMS',
+                          prefixIcon: const Icon(Icons.sms),
                           border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(14)),
                         ),
@@ -453,14 +473,17 @@ class _LoginScreenState extends State {
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(14)),
                         ),
-                        onPressed:
-                            _busy ? null : (_otpSent ? _verifyAndEnter : _sendOtp),
+                        onPressed: _busy
+                            ? null
+                            : (_otpSent
+                                ? _verifySmsAndEnter
+                                : _sendRealSmsOtp),
                         child: _busy
                             ? const CircularProgressIndicator(color: Colors.white)
                             : Text(
                                 _otpSent
-                                    ? 'تأكيد ودخول للتطبيق'
-                                    : 'إرسال كود التفعيل',
+                                    ? 'تأكيد الكود والدخول'
+                                    : 'إرسال كود SMS على الموبايل',
                                 style: const TextStyle(
                                     fontSize: 16, fontWeight: FontWeight.bold),
                               ),
@@ -478,7 +501,7 @@ class _LoginScreenState extends State {
 }
 
 // ============================================================================
-// 2. MAIN HOME SHELL (ULTRA-FAST INDEXED STACK)
+// 2. MAIN HOME SHELL
 // ============================================================================
 class MainHomeShell extends StatefulWidget {
   final String userPhone;
@@ -508,7 +531,7 @@ class _MainHomeShellState extends State {
         currentUserPhone: w.userPhone,
         isAdmin: w.userPhone == adminPhoneNumber,
       ),
-      WalletTab(
+      DirectPayAndQrTab(
         currentUserPhone: w.userPhone,
         isAdmin: w.userPhone == adminPhoneNumber,
       ),
@@ -539,14 +562,14 @@ class _MainHomeShellState extends State {
             label: 'الموجز',
           ),
           NavigationDestination(
-            icon: Icon(Icons.account_balance_wallet_outlined),
-            selectedIcon: Icon(Icons.account_balance_wallet),
-            label: 'المحفظة',
+            icon: Icon(Icons.qr_code_2),
+            selectedIcon: Icon(Icons.qr_code_2),
+            label: 'الدفع والباركود',
           ),
           NavigationDestination(
             icon: Icon(Icons.grid_view_outlined),
             selectedIcon: Icon(Icons.grid_view),
-            label: 'الخدمات',
+            label: 'الخدمات والتوصيل',
           ),
         ],
       ),
@@ -555,7 +578,7 @@ class _MainHomeShellState extends State {
 }
 
 // ============================================================================
-// 3. CHATS (1-TO-1 + UNLIMITED GROUPS + BLOCK + REPORT + FRIENDS)
+// 3. CHATS (PROMINENT CONTACTS BUTTON + CLEAN "الجروبات" TAB + LIVE LOCATION)
 // ============================================================================
 class ChatsAndGroupsTab extends StatefulWidget {
   final String currentUserPhone;
@@ -629,7 +652,7 @@ class _ChatsAndGroupsTabState extends State {
     }
   }
 
-  void _createUnlimitedGroupDialog() {
+  void _createGroupDialog() {
     final nameCtrl = TextEditingController();
     final selectedPhones = {w.currentUserPhone};
 
@@ -637,7 +660,7 @@ class _ChatsAndGroupsTabState extends State {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSt) => AlertDialog(
-          title: const Text('إنشاء جروب مفتوح العدد 👥'),
+          title: const Text('إنشاء جروب جديد 👥'),
           content: SizedBox(
             width: double.maxFinite,
             child: Column(
@@ -651,11 +674,6 @@ class _ChatsAndGroupsTabState extends State {
                   ),
                 ),
                 const SizedBox(height: 10),
-                const Align(
-                  alignment: Alignment.centerRight,
-                  child: Text('اختر الأعضاء (عدد مفتوح):',
-                      style: TextStyle(fontWeight: FontWeight.bold)),
-                ),
                 SizedBox(
                   height: 180,
                   child: ListView.builder(
@@ -703,7 +721,7 @@ class _ChatsAndGroupsTabState extends State {
                 });
                 _loadData();
               },
-              child: const Text('إنشاء الجروب'),
+              child: const Text('إنشاء'),
             ),
           ],
         ),
@@ -711,9 +729,17 @@ class _ChatsAndGroupsTabState extends State {
     );
   }
 
-  Future _openContactsSheet() async {
+  Future _openContactsScreen() async {
     final granted = await FlutterContacts.requestPermission(readonly: true);
-    if (!granted) return;
+    if (!granted) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('يرجى السماح بالوصول لجهات الاتصال من الإعدادات')),
+        );
+      }
+      return;
+    }
     final contacts = await FlutterContacts.getContacts(withProperties: true);
     final registeredMap = {};
     for (var u in _users) {
@@ -761,19 +787,15 @@ class _ChatsAndGroupsTabState extends State {
             labelColor: Colors.white,
             unselectedLabelColor: Colors.white70,
             tabs: [
-              Tab(text: 'محادثات خاصة (1 إلى 1)'),
-              Tab(text: 'الجروبات (مفتوحة العدد)'),
+              Tab(text: 'محادثات خاصة'),
+              Tab(text: 'الجروبات'),
             ],
           ),
           actions: [
             IconButton(
               icon: const Icon(Icons.group_add),
               tooltip: 'إنشاء جروب',
-              onPressed: _createUnlimitedGroupDialog,
-            ),
-            IconButton(
-              icon: const Icon(Icons.contacts),
-              onPressed: _openContactsSheet,
+              onPressed: _createGroupDialog,
             ),
           ],
         ),
@@ -836,7 +858,7 @@ class _ChatsAndGroupsTabState extends State {
                           child: Icon(Icons.groups, color: Colors.black),
                         ),
                         title: Text(g['group_name'] ?? ''),
-                        subtitle: Text('عدد الأعضاء: ${members.length} عضو'),
+                        subtitle: Text('الأعضاء: ${members.length}'),
                         trailing: const Icon(Icons.chevron_right),
                         onTap: () {
                           Navigator.push(
@@ -863,9 +885,9 @@ class _ChatsAndGroupsTabState extends State {
         floatingActionButton: FloatingActionButton.extended(
           backgroundColor: const Color(0xFF006A4E),
           foregroundColor: Colors.white,
-          onPressed: _createUnlimitedGroupDialog,
-          icon: const Icon(Icons.group_add),
-          label: const Text('جروب جديد'),
+          onPressed: _openContactsScreen,
+          icon: const Icon(Icons.contacts),
+          label: const Text('جهات الاتصال'),
         ),
       ),
     );
@@ -889,12 +911,20 @@ class FullContactsScreen extends StatelessWidget {
       appBar: AppBar(title: const Text('جهات الاتصال')),
       body: ListView(
         children: [
+          if (matched.isNotEmpty)
+            const Padding(
+              padding: EdgeInsets.all(12),
+              child: Text('مسجلون في EG MASR',
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold, color: Color(0xFF006A4E))),
+            ),
           ...matched.map((m) => ListTile(
                 leading: const CircleAvatar(
                     backgroundColor: Color(0xFF006A4E),
                     child: Icon(Icons.person, color: Colors.white)),
                 title: Text(m['name']),
                 subtitle: Text(m['phone']),
+                trailing: const Icon(Icons.chat, color: Color(0xFF006A4E)),
                 onTap: () {
                   final list = [myPhone, m['phone'].toString()]..sort();
                   Navigator.pushReplacement(
@@ -911,6 +941,11 @@ class FullContactsScreen extends StatelessWidget {
                   );
                 },
               )),
+          const Padding(
+            padding: EdgeInsets.all(12),
+            child: Text('جميع جهات الاتصال على هاتفك',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
           ...allContacts.map((c) => ListTile(
                 leading: const CircleAvatar(child: Icon(Icons.phone)),
                 title: Text(c['name']),
@@ -1009,6 +1044,34 @@ class _ChatRoomScreenState extends State {
     } catch (_) {}
   }
 
+  Future _sendMyLiveLocation() async {
+    try {
+      LocationPermission perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.denied ||
+          perm == LocationPermission.deniedForever) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('يرجى تفعيل صلاحية الموقع GPS')),
+          );
+        }
+        return;
+      }
+      final pos = await Geolocator.getCurrentPosition();
+      final mapsUrl =
+          'https://www.google.com/maps/search/?api=1&query=${pos.latitude},${pos.longitude}';
+      _sendMessage('📍 موقعي الحالي على الخريطة:\n$mapsUrl', type: 'location');
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('تعذر تحديد الموقع: $e')),
+        );
+      }
+    }
+  }
+
   void _toggleVoiceRecording() {
     if (!_isRecording) {
       setState(() {
@@ -1071,7 +1134,7 @@ class _ChatRoomScreenState extends State {
         content: TextField(
           controller: reasonCtrl,
           decoration: const InputDecoration(
-            labelText: 'سبب الإبلاغ (إزعاج / احتيال / محتوى مخالف)',
+            labelText: 'سبب الإبلاغ',
           ),
         ),
         actions: [
@@ -1103,40 +1166,6 @@ class _ChatRoomScreenState extends State {
     );
   }
 
-  void _addMemberToGroupDialog() {
-    final phoneCtrl = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('إضافة عضو جديد للجروب'),
-        content: TextField(
-          controller: phoneCtrl,
-          keyboardType: TextInputType.phone,
-          decoration: const InputDecoration(labelText: 'رقم موبايل العضو'),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
-          ElevatedButton(
-            onPressed: () async {
-              final p = phoneCtrl.text.trim();
-              if (p.length >= 11 && w.groupId != null) {
-                Navigator.pop(ctx);
-                final updated = List.from(w.groupMembers ?? [])..add(p);
-                await supabase
-                    .from('groups')
-                    .update({'members': updated}).eq('id', w.groupId!);
-                w.onRelationChanged?.call();
-                _sendMessage('➕ قام ${w.myPhone} بإضافة $p إلى الجروب');
-              }
-            },
-            child: const Text('إضافة'),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1144,13 +1173,12 @@ class _ChatRoomScreenState extends State {
         title: Text(w.title),
         actions: [
           IconButton(
+              icon: const Icon(Icons.location_on),
+              tooltip: 'إرسال موقعي',
+              onPressed: _sendMyLiveLocation),
+          IconButton(
               icon: const Icon(Icons.refresh), onPressed: _fetchMessages),
-          if (w.isGroup)
-            IconButton(
-              icon: const Icon(Icons.person_add),
-              onPressed: _addMemberToGroupDialog,
-            )
-          else
+          if (!w.isGroup)
             PopupMenuButton(
               itemBuilder: (_) => [
                 const PopupMenuItem(
@@ -1181,32 +1209,57 @@ class _ChatRoomScreenState extends State {
               itemBuilder: (_, i) {
                 final m = _messages[i];
                 final isMe = m['sender_phone'] == w.myPhone;
+                final content = m['content'].toString();
+                final isLoc = content.contains('https://www.google.com/maps');
+
                 return Align(
                   alignment:
                       isMe ? Alignment.centerRight : Alignment.centerLeft,
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(vertical: 4),
-                    padding: const EdgeInsets.all(12),
-                    constraints: const BoxConstraints(maxWidth: 270),
-                    decoration: BoxDecoration(
-                      color: isMe ? const Color(0xFF006A4E) : Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (w.isGroup && !isMe)
-                          Text(m['sender_phone'] ?? '',
-                              style: const TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
-                                  color: Color(0xFF006A4E))),
-                        Text(
-                          m['content'].toString(),
-                          style: TextStyle(
-                              color: isMe ? Colors.white : Colors.black87),
-                        ),
-                      ],
+                  child: InkWell(
+                    onTap: isLoc
+                        ? () {
+                            final url = content.split('\n').last.trim();
+                            launchUrl(Uri.parse(url),
+                                mode: LaunchMode.externalApplication);
+                          }
+                        : null,
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(vertical: 4),
+                      padding: const EdgeInsets.all(12),
+                      constraints: const BoxConstraints(maxWidth: 270),
+                      decoration: BoxDecoration(
+                        color: isMe ? const Color(0xFF006A4E) : Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (w.isGroup && !isMe)
+                            Text(m['sender_phone'] ?? '',
+                                style: const TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF006A4E))),
+                          Text(
+                            content,
+                            style: TextStyle(
+                                color: isMe ? Colors.white : Colors.black87,
+                                decoration:
+                                    isLoc ? TextDecoration.underline : null),
+                          ),
+                          if (isLoc)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text('اضغط لفتح الموقع على الخريطة 🗺️',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold,
+                                      color: isMe
+                                          ? const Color(0xFFD4AF37)
+                                          : const Color(0xFF006A4E))),
+                            ),
+                        ],
+                      ),
                     ),
                   ),
                 );
@@ -1214,10 +1267,15 @@ class _ChatRoomScreenState extends State {
             ),
           ),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
             color: Colors.white,
             child: Row(
               children: [
+                IconButton(
+                  icon: const Icon(Icons.location_on, color: Colors.red),
+                  tooltip: 'مشاركة موقعي',
+                  onPressed: _sendMyLiveLocation,
+                ),
                 IconButton(
                   icon: const Icon(Icons.photo, color: Color(0xFF006A4E)),
                   onPressed: () async {
@@ -1236,7 +1294,7 @@ class _ChatRoomScreenState extends State {
                       : TextField(
                           controller: _msgCtrl,
                           decoration: const InputDecoration(
-                            hintText: 'اكتب رسالتك هنا...',
+                            hintText: 'اكتب رسالتك...',
                             border: InputBorder.none,
                           ),
                           onSubmitted: _sendMessage,
@@ -1266,7 +1324,7 @@ class _ChatRoomScreenState extends State {
 }
 
 // ============================================================================
-// 4. SOCIAL FEED TAB (FACEBOOK / INSTAGRAM STYLE + PRIVACY + BLOCK + REPORT)
+// 4. SOCIAL FEED TAB (FIXED REAL IMAGE & VIDEO UPLOAD + DISPLAY)
 // ============================================================================
 class SocialFeedTab extends StatefulWidget {
   final String currentUserPhone;
@@ -1347,18 +1405,35 @@ class _SocialFeedTabState extends State {
     }
   }
 
+  Future _uploadFileToSupabase(XFile file, String ext) async {
+    final bytes = await file.readAsBytes();
+    final fileName = 'egmasr_${DateTime.now().millisecondsSinceEpoch}.$ext';
+    for (final bucket in ['media', 'avatars']) {
+      try {
+        await supabase.storage.from(bucket).uploadBinary(
+              fileName,
+              bytes,
+              fileOptions: const FileOptions(upsert: true),
+            );
+        return supabase.storage.from(bucket).getPublicUrl(fileName);
+      } catch (_) {}
+    }
+    return '';
+  }
+
   void _openCreatePostDialog() {
     final contentCtrl = TextEditingController();
     String privacy = 'public';
     String mediaType = 'text';
-    String? uploadedUrl;
+    String uploadedUrl = '';
+    bool uploading = false;
     final picker = ImagePicker();
 
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSt) => AlertDialog(
-          title: const Text('إنشاء منشور جديد في الموجز'),
+          title: const Text('منشور جديد في الموجز'),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -1366,7 +1441,7 @@ class _SocialFeedTabState extends State {
                 DropdownButtonFormField(
                   value: privacy,
                   decoration: const InputDecoration(
-                    labelText: 'خصوصية المنشور (من يمكنه الرؤية؟)',
+                    labelText: 'الخصوصية',
                     prefixIcon: Icon(Icons.lock_person),
                   ),
                   items: const [
@@ -1386,38 +1461,46 @@ class _SocialFeedTabState extends State {
                   controller: contentCtrl,
                   maxLines: 3,
                   decoration: const InputDecoration(
-                    hintText: 'بم تفكر؟ شارك صورك أو فيديوهاتك القصيرة...',
+                    hintText: 'اكتب منشورك هنا...',
                     border: OutlineInputBorder(),
                   ),
                 ),
                 const SizedBox(height: 10),
+                if (uploading)
+                  const Padding(
+                    padding: EdgeInsets.all(8.0),
+                    child: CircularProgressIndicator(),
+                  ),
                 Row(
                   children: [
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: () async {
-                          final img = await picker.pickImage(
-                              source: ImageSource.gallery, imageQuality: 70);
-                          if (img != null) {
-                            try {
-                              final bytes = await img.readAsBytes();
-                              final path =
-                                  'post_${DateTime.now().millisecondsSinceEpoch}.jpg';
-                              await supabase.storage
-                                  .from('avatars')
-                                  .uploadBinary(path, bytes);
-                              final url = supabase.storage
-                                  .from('avatars')
-                                  .getPublicUrl(path);
-                              setSt(() {
-                                uploadedUrl = url;
-                                mediaType = 'image';
-                              });
-                            } catch (_) {
-                              setSt(() => mediaType = 'image');
-                            }
-                          }
-                        },
+                        onPressed: uploading
+                            ? null
+                            : () async {
+                                final img = await picker.pickImage(
+                                    source: ImageSource.gallery,
+                                    imageQuality: 75);
+                                if (img != null) {
+                                  setSt(() => uploading = true);
+                                  final url =
+                                      await _uploadFileToSupabase(img, 'jpg');
+                                  setSt(() {
+                                    uploading = false;
+                                    if (url.isNotEmpty) {
+                                      uploadedUrl = url;
+                                      mediaType = 'image';
+                                    }
+                                  });
+                                  if (url.isEmpty && mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                          content: Text(
+                                              'يرجى تفعيل Public Bucket باسم media أو avatars في Supabase Storage')),
+                                    );
+                                  }
+                                }
+                              },
                         icon: const Icon(Icons.image),
                         label: const Text('صورة'),
                       ),
@@ -1425,30 +1508,40 @@ class _SocialFeedTabState extends State {
                     const SizedBox(width: 8),
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: () async {
-                          final vid = await picker.pickVideo(
-                              source: ImageSource.gallery);
-                          if (vid != null) {
-                            setSt(() {
-                              uploadedUrl = vid.name;
-                              mediaType = 'video';
-                            });
-                          }
-                        },
+                        onPressed: uploading
+                            ? null
+                            : () async {
+                                final vid = await picker.pickVideo(
+                                    source: ImageSource.gallery);
+                                if (vid != null) {
+                                  setSt(() => uploading = true);
+                                  final url =
+                                      await _uploadFileToSupabase(vid, 'mp4');
+                                  setSt(() {
+                                    uploading = false;
+                                    if (url.isNotEmpty) {
+                                      uploadedUrl = url;
+                                      mediaType = 'video';
+                                    }
+                                  });
+                                }
+                              },
                         icon: const Icon(Icons.video_library),
-                        label: const Text('فيديو قصير'),
+                        label: const Text('فيديو'),
                       ),
                     ),
                   ],
                 ),
-                if (mediaType != 'text')
+                if (uploadedUrl.isNotEmpty)
                   Padding(
-                    padding: const EdgeInsets.only(top: 6),
+                    padding: const EdgeInsets.only(top: 8),
                     child: Text(
-                        mediaType == 'image'
-                            ? '✅ تم إرفاق صورة'
-                            : '🎬 تم إرفاق فيديو قصير (Reels)',
-                        style: const TextStyle(color: Colors.green)),
+                      mediaType == 'image'
+                          ? '✅ تم رفع الصورة وجاهزة للنشر'
+                          : '🎬 تم رفع الفيديو وجاهز للنشر',
+                      style: const TextStyle(
+                          color: Colors.green, fontWeight: FontWeight.bold),
+                    ),
                   ),
               ],
             ),
@@ -1462,23 +1555,26 @@ class _SocialFeedTabState extends State {
                 backgroundColor: const Color(0xFF006A4E),
                 foregroundColor: Colors.white,
               ),
-              onPressed: () async {
-                if (contentCtrl.text.trim().isEmpty && mediaType == 'text') {
-                  return;
-                }
-                Navigator.pop(ctx);
-                await supabase.from('posts').insert({
-                  'author_phone': w.currentUserPhone,
-                  'author_name': _myName,
-                  'content': contentCtrl.text.trim(),
-                  'media_url': uploadedUrl ?? '',
-                  'media_type': mediaType,
-                  'privacy': privacy,
-                  'likes': [],
-                  'comments': [],
-                });
-                _loadFeed();
-              },
+              onPressed: uploading
+                  ? null
+                  : () async {
+                      if (contentCtrl.text.trim().isEmpty &&
+                          uploadedUrl.isEmpty) {
+                        return;
+                      }
+                      Navigator.pop(ctx);
+                      await supabase.from('posts').insert({
+                        'author_phone': w.currentUserPhone,
+                        'author_name': _myName,
+                        'content': contentCtrl.text.trim(),
+                        'media_url': uploadedUrl,
+                        'media_type': mediaType,
+                        'privacy': privacy,
+                        'likes': [],
+                        'comments': [],
+                      });
+                      _loadFeed();
+                    },
               child: const Text('نشر الآن'),
             ),
           ],
@@ -1576,7 +1672,7 @@ class _SocialFeedTabState extends State {
                   child: ElevatedButton.icon(
                     onPressed: _openCreatePostDialog,
                     icon: const Icon(Icons.add),
-                    label: const Text('انشر أول بوست أو فيديو قصير'),
+                    label: const Text('انشر أول بوست أو صورة أو فيديو'),
                   ),
                 )
               : ListView.builder(
@@ -1588,6 +1684,7 @@ class _SocialFeedTabState extends State {
                     final comments = List.from(p['comments'] ?? []);
                     final isLiked = likes.contains(w.currentUserPhone);
                     final priv = p['privacy'] ?? 'public';
+                    final mediaUrl = (p['media_url'] ?? '').toString();
 
                     return Card(
                       margin: const EdgeInsets.only(bottom: 14),
@@ -1626,62 +1723,6 @@ class _SocialFeedTabState extends State {
                                     ],
                                   ),
                                 ),
-                                if (p['author_phone'] != w.currentUserPhone)
-                                  PopupMenuButton(
-                                    itemBuilder: (_) => [
-                                      const PopupMenuItem(
-                                          value: 'friend',
-                                          child: Text('إضافة صديق 👥')),
-                                      const PopupMenuItem(
-                                          value: 'block',
-                                          child: Text('حظر (Block) 🚫',
-                                              style: TextStyle(
-                                                  color: Colors.red))),
-                                      const PopupMenuItem(
-                                          value: 'report',
-                                          child: Text('إبلاغ للأدمن 🚨',
-                                              style: TextStyle(
-                                                  color: Colors.orange))),
-                                    ],
-                                    onSelected: (v) async {
-                                      final target =
-                                          p['author_phone'].toString();
-                                      if (v == 'friend') {
-                                        await supabase
-                                            .from('user_relations')
-                                            .insert({
-                                          'user_phone': w.currentUserPhone,
-                                          'target_phone': target,
-                                          'relation_type': 'friend',
-                                        });
-                                        _loadFeed();
-                                      } else if (v == 'block') {
-                                        await supabase
-                                            .from('user_relations')
-                                            .insert({
-                                          'user_phone': w.currentUserPhone,
-                                          'target_phone': target,
-                                          'relation_type': 'block',
-                                        });
-                                        _loadFeed();
-                                      } else if (v == 'report') {
-                                        await supabase.from('reports').insert({
-                                          'reporter_phone': w.currentUserPhone,
-                                          'reported_phone': target,
-                                          'reason':
-                                              'إبلاغ عن منشور مخالف في الموجز',
-                                        });
-                                        if (mounted) {
-                                          ScaffoldMessenger.of(context)
-                                              .showSnackBar(
-                                            const SnackBar(
-                                                content: Text(
-                                                    'وصل البلاغ للأدمن فوراً 🚨')),
-                                          );
-                                        }
-                                      }
-                                    },
-                                  ),
                               ],
                             ),
                             const SizedBox(height: 10),
@@ -1689,33 +1730,37 @@ class _SocialFeedTabState extends State {
                               Text(p['content'],
                                   style: const TextStyle(fontSize: 15)),
                             if (p['media_type'] == 'image' &&
-                                (p['media_url'] ?? '')
-                                    .toString()
-                                    .startsWith('http')) ...[
+                                mediaUrl.startsWith('http')) ...[
                               const SizedBox(height: 10),
                               ClipRRect(
                                 borderRadius: BorderRadius.circular(12),
-                                child: Image.network(p['media_url'],
-                                    fit: BoxFit.cover),
+                                child: Image.network(mediaUrl,
+                                    width: double.infinity, fit: BoxFit.cover),
                               ),
-                            ] else if (p['media_type'] == 'video') ...[
+                            ] else if (p['media_type'] == 'video' &&
+                                mediaUrl.startsWith('http')) ...[
                               const SizedBox(height: 10),
-                              Container(
-                                height: 140,
-                                decoration: BoxDecoration(
-                                  color: Colors.black87,
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: const Center(
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(Icons.play_circle_fill,
-                                          color: Color(0xFFD4AF37), size: 48),
-                                      Text('فيديو قصير (EG MASR Reels)',
-                                          style:
-                                              TextStyle(color: Colors.white)),
-                                    ],
+                              InkWell(
+                                onTap: () => launchUrl(Uri.parse(mediaUrl),
+                                    mode: LaunchMode.externalApplication),
+                                child: Container(
+                                  height: 150,
+                                  decoration: BoxDecoration(
+                                    color: Colors.black87,
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: const Center(
+                                    child: Column(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        Icon(Icons.play_circle_fill,
+                                            color: Color(0xFFD4AF37), size: 52),
+                                        Text('اضغط لتشغيل الفيديو',
+                                            style:
+                                                TextStyle(color: Colors.white)),
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ),
@@ -1743,8 +1788,7 @@ class _SocialFeedTabState extends State {
                                   onPressed: () {
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       const SnackBar(
-                                          content: Text(
-                                              'تمت مشاركة المنشور على صفحتك ✅')),
+                                          content: Text('تمت المشاركة ✅')),
                                     );
                                   },
                                   icon: const Icon(Icons.share_outlined),
@@ -1770,50 +1814,58 @@ class _SocialFeedTabState extends State {
 }
 
 // ============================================================================
-// 5. WALLET TAB + ADMIN CONTROL (COMPANIES & REPORTS ONLY)
+// 5. DIRECT BANK/WALLET LINKING & UNIQUE NON-REPEATING QR PAY (NO APP WALLET)
 // ============================================================================
-class WalletTab extends StatefulWidget {
+class DirectPayAndQrTab extends StatefulWidget {
   final String currentUserPhone;
   final bool isAdmin;
-  const WalletTab({
+  const DirectPayAndQrTab({
     super.key,
     required this.currentUserPhone,
     required this.isAdmin,
   });
 
   @override
-  State createState() => _WalletTabState();
+  State createState() => _DirectPayAndQrTabState();
 }
 
-class _WalletTabState extends State {
-  double _balance = 0.0;
+class _DirectPayAndQrTabState extends State {
   String _fullName = 'مستخدم EG Masr';
-  String _linkedMethod = '';
+  String _linkedAccount = '';
+  String _uniqueQrToken = '';
   List _txHistory = [];
 
-  WalletTab get w => widget as WalletTab;
+  DirectPayAndQrTab get w => widget as DirectPayAndQrTab;
 
   @override
   void initState() {
     super.initState();
-    _loadAllWalletData();
+    _initDirectPayData();
   }
 
-  Future _loadAllWalletData() async {
+  Future _initDirectPayData() async {
     final prefs = await SharedPreferences.getInstance();
-    _linkedMethod =
-        prefs.getString('linked_method_${w.currentUserPhone}') ?? '';
+    _linkedAccount =
+        prefs.getString('direct_linked_${w.currentUserPhone}') ?? '';
+
+    String? savedQr = prefs.getString('unique_qr_${w.currentUserPhone}');
+    if (savedQr == null || savedQr.isEmpty) {
+      final randomHex =
+          Random.secure().nextInt(99999999).toRadixString(16).toUpperCase();
+      final ts = DateTime.now().millisecondsSinceEpoch.toRadixString(36);
+      savedQr =
+          'EGMASR-UID-${w.currentUserPhone}-$randomHex-$ts';
+      await prefs.setString('unique_qr_${w.currentUserPhone}', savedQr);
+    }
+
     try {
       final data = await supabase
           .from('profiles')
           .select()
           .eq('phone', w.currentUserPhone)
           .maybeSingle();
-      if (data != null && mounted) {
-        setState(() {
-          _balance = (data['balance'] ?? 0.0).toDouble();
-          _fullName = data['full_name'] ?? _fullName;
-        });
+      if (data != null) {
+        _fullName = data['full_name'] ?? _fullName;
       }
       final txs = await supabase
           .from('transactions')
@@ -1821,18 +1873,22 @@ class _WalletTabState extends State {
           .or('sender_phone.eq.${w.currentUserPhone},receiver_phone.eq.${w.currentUserPhone}')
           .order('created_at', ascending: false);
       if (mounted) {
-        setState(() => _txHistory = List.from(txs));
+        setState(() {
+          _uniqueQrToken = savedQr!;
+          _txHistory = List.from(txs);
+        });
       }
-    } catch (_) {}
+    } catch (_) {
+      if (mounted) setState(() => _uniqueQrToken = savedQr!);
+    }
   }
 
-  void _openLinkPaymentMethodDialog() {
-    String selectedProvider = 'فودافون كاش (Vodafone Cash)';
+  void _openLinkBankOrWalletDialog() {
+    String selectedProvider = 'حساب بنكي / فيزا (Visa / Mastercard / Meeza)';
     final numberCtrl = TextEditingController();
-    final depositCtrl = TextEditingController();
 
     final providers = [
-      'بطاقة بنكية (Visa / Mastercard / Meeza)',
+      'حساب بنكي / فيزا (Visa / Mastercard / Meeza)',
       'فودافون كاش (Vodafone Cash)',
       'أورانج كاش (Orange Cash)',
       'اتصالات كاش (e& Money)',
@@ -1843,83 +1899,64 @@ class _WalletTabState extends State {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
-          title: const Text('ربط فيزا أو محفظة إلكترونية'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                DropdownButtonFormField(
-                  value: selectedProvider,
-                  isExpanded: true,
-                  items: providers
-                      .map((p) => DropdownMenuItem(value: p, child: Text(p)))
-                      .toList(),
-                  onChanged: (v) {
-                    if (v != null) {
-                      setDialogState(() => selectedProvider = v.toString());
-                    }
-                  },
+          title: const Text('ربط مباشر مع البنك أو المحفظة'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField(
+                value: selectedProvider,
+                isExpanded: true,
+                items: providers
+                    .map((p) => DropdownMenuItem(value: p, child: Text(p)))
+                    .toList(),
+                onChanged: (v) {
+                  if (v != null) {
+                    setDialogState(() => selectedProvider = v.toString());
+                  }
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: numberCtrl,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: selectedProvider.contains('بنكي')
+                      ? 'رقم البطاقة البنكية أو IBAN'
+                      : 'رقم محفظة الموبايل (01xxxxxxxxx)',
                 ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: numberCtrl,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    labelText: selectedProvider.contains('بطاقة')
-                        ? 'رقم الفيزا (16 رقم)'
-                        : 'رقم المحفظة (01xxxxxxxxx)',
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: depositCtrl,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                      labelText: 'مبلغ الشحن الفوري لحسابك (ج.م)'),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(ctx),
                 child: const Text('إلغاء')),
             ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF006A4E),
+                foregroundColor: Colors.white,
+              ),
               onPressed: () async {
                 final numStr = numberCtrl.text.trim();
-                final amt = double.tryParse(depositCtrl.text.trim()) ?? 0.0;
                 if (numStr.length < 11) return;
                 Navigator.pop(ctx);
                 final last4 = numStr.substring(numStr.length - 4);
                 final label = '$selectedProvider (****$last4)';
                 final prefs = await SharedPreferences.getInstance();
                 await prefs.setString(
-                    'linked_method_${w.currentUserPhone}', label);
-
-                final newBal = _balance + amt;
-                final ref = 'EGM${Random().nextInt(899999) + 100000}';
-                setState(() {
-                  _linkedMethod = label;
-                  _balance = newBal;
-                });
-
-                await supabase
-                    .from('profiles')
-                    .update({'balance': newBal}).eq(
-                        'phone', w.currentUserPhone);
-                if (amt > 0) {
-                  await supabase.from('transactions').insert({
-                    'ref_code': ref,
-                    'sender_phone': 'TOPUP_WALLET',
-                    'receiver_phone': w.currentUserPhone,
-                    'amount': amt,
-                    'tx_type': 'deposit',
-                    'note': 'شحن من $label',
-                  });
+                    'direct_linked_${w.currentUserPhone}', label);
+                setState(() => _linkedAccount = label);
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                          'تم الربط المباشر! سيتم الخصم والاستقبال مباشرة من حسابك المرتبط ✅'),
+                      backgroundColor: Color(0xFF006A4E),
+                    ),
+                  );
                 }
-                _loadAllWalletData();
               },
-              child: const Text('ربط وشحن الآن'),
+              child: const Text('تأكيد الربط المباشر'),
             ),
           ],
         ),
@@ -1927,76 +1964,35 @@ class _WalletTabState extends State {
     );
   }
 
-  Future _executeRealTransfer(String toPhone, double amount) async {
-    if (amount <= 0 || amount > _balance) {
+  void _openDirectTransferDialog({String? targetAcc}) {
+    if (_linkedAccount.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-            content: Text('الرصيد غير كافٍ أو المبلغ غير صحيح!'),
-            backgroundColor: Colors.red),
+          content: Text('يرجى ربط حسابك البنكي أو محفظتك أولاً!'),
+          backgroundColor: Colors.orange,
+        ),
       );
+      _openLinkBankOrWalletDialog();
       return;
     }
 
-    final newSenderBal = _balance - amount;
-    final ref = 'TRX${Random().nextInt(899999) + 100000}';
-    setState(() => _balance = newSenderBal);
-
-    await supabase
-        .from('profiles')
-        .update({'balance': newSenderBal}).eq('phone', w.currentUserPhone);
-
-    final rec = await supabase
-        .from('profiles')
-        .select()
-        .eq('phone', toPhone)
-        .maybeSingle();
-    if (rec != null) {
-      final recNewBal = (rec['balance'] ?? 0.0).toDouble() + amount;
-      await supabase
-          .from('profiles')
-          .update({'balance': recNewBal}).eq('phone', toPhone);
-    }
-
-    await supabase.from('transactions').insert({
-      'ref_code': ref,
-      'sender_phone': w.currentUserPhone,
-      'receiver_phone': toPhone,
-      'amount': amount,
-      'tx_type': 'transfer',
-      'note': 'تحويل فوري إلى $toPhone',
-    });
-
-    _loadAllWalletData();
-    if (mounted) {
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('إشعار خصم وتحويل - EG MASR'),
-          content: Text(
-              'تم خصم ${amount.toStringAsFixed(2)} ج.م وتحويلها إلى $toPhone.\nالرصيد المتاح: ${newSenderBal.toStringAsFixed(2)} ج.م\nمرجع: #$ref'),
-          actions: [
-            ElevatedButton(
-                onPressed: () => Navigator.pop(ctx), child: const Text('تم'))
-          ],
-        ),
-      );
-    }
-  }
-
-  void _openTransferDialog({String? prefilledPhone}) {
-    final phoneCtrl = TextEditingController(text: prefilledPhone ?? '');
+    final toCtrl = TextEditingController(text: targetAcc ?? '');
     final amtCtrl = TextEditingController();
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('تحويل أموال فوري'),
+        title: const Text('تحويل / دفع مباشر عبر الباركود'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            Text('الخصم المباشر من: $_linkedAccount',
+                style: const TextStyle(fontSize: 12, color: Colors.grey)),
+            const SizedBox(height: 10),
             TextField(
-              controller: phoneCtrl,
-              keyboardType: TextInputType.phone,
-              decoration: const InputDecoration(labelText: 'رقم حساب المستلم'),
+              controller: toCtrl,
+              decoration:
+                  const InputDecoration(labelText: 'رقم حساب / باركود المستلم'),
             ),
             const SizedBox(height: 10),
             TextField(
@@ -2010,13 +2006,42 @@ class _WalletTabState extends State {
           TextButton(
               onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
           ElevatedButton(
-            onPressed: () {
-              final p = phoneCtrl.text.trim();
-              final a = double.tryParse(amtCtrl.text.trim()) ?? 0.0;
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF006A4E),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () async {
+              final amt = double.tryParse(amtCtrl.text.trim()) ?? 0.0;
+              final dest = toCtrl.text.trim();
+              if (amt <= 0 || dest.isEmpty) return;
               Navigator.pop(ctx);
-              _executeRealTransfer(p, a);
+              final ref = 'DIR${Random().nextInt(899999) + 100000}';
+              await supabase.from('transactions').insert({
+                'ref_code': ref,
+                'sender_phone': w.currentUserPhone,
+                'receiver_phone': dest,
+                'amount': amt,
+                'tx_type': 'direct_bank',
+                'note': 'خصم مباشر من $_linkedAccount إلى $dest',
+              });
+              _initDirectPayData();
+              if (mounted) {
+                showDialog(
+                  context: context,
+                  builder: (c) => AlertDialog(
+                    title: const Text('تم الدفع المباشر بنجاح ✅'),
+                    content: Text(
+                        'تم خصم $amt ج.م مباشرة من $_linkedAccount\nالمستلم: $dest\nرقم المرجع: #$ref'),
+                    actions: [
+                      ElevatedButton(
+                          onPressed: () => Navigator.pop(c),
+                          child: const Text('تم'))
+                    ],
+                  ),
+                );
+              }
             },
-            child: const Text('تأكيد التحويل'),
+            child: const Text('تأكيد الدفع المباشر'),
           ),
         ],
       ),
@@ -2025,15 +2050,10 @@ class _WalletTabState extends State {
 
   @override
   Widget build(BuildContext context) {
-    final uniqueQrPayload =
-        'EGMASR://PAY?ACC=${w.currentUserPhone}&NAME=${Uri.encodeComponent(_fullName)}';
-
     return Scaffold(
       appBar: AppBar(
-        title: const Text('محفظة EG MASR و QR'),
+        title: const Text('الربط البنكي والدفع بالباركود'),
         actions: [
-          IconButton(
-              icon: const Icon(Icons.refresh), onPressed: _loadAllWalletData),
           if (w.isAdmin)
             IconButton(
               icon: const Icon(Icons.admin_panel_settings,
@@ -2098,26 +2118,16 @@ class _WalletTabState extends State {
                           fontWeight: FontWeight.bold)),
                   Text('رقم الحساب: ${w.currentUserPhone}',
                       style: const TextStyle(color: Colors.white70)),
-                  if (_linkedMethod.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: Chip(
-                        backgroundColor: Colors.white12,
-                        label: Text('🔗 $_linkedMethod',
-                            style: const TextStyle(
-                                color: Color(0xFFD4AF37), fontSize: 11)),
-                      ),
-                    ),
                   const Divider(color: Colors.white24, height: 24),
-                  const Text('الرصيد المتاح في محفظتك',
-                      style: TextStyle(color: Colors.white70)),
                   Text(
-                    '${_balance.toStringAsFixed(2)} ج.م',
+                    _linkedAccount.isEmpty
+                        ? 'لم يتم ربط حساب بنكي أو محفظة بعد'
+                        : 'الحساب المرتبط للدفع المباشر:\n$_linkedAccount',
+                    textAlign: TextAlign.center,
                     style: const TextStyle(
-                      color: Color(0xFFD4AF37),
-                      fontSize: 32,
-                      fontWeight: FontWeight.bold,
-                    ),
+                        color: Color(0xFFD4AF37),
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 16),
                   Row(
@@ -2128,9 +2138,11 @@ class _WalletTabState extends State {
                             backgroundColor: const Color(0xFFD4AF37),
                             foregroundColor: Colors.black,
                           ),
-                          onPressed: _openLinkPaymentMethodDialog,
-                          icon: const Icon(Icons.add_card),
-                          label: const Text('ربط فيزا / محفظة'),
+                          onPressed: _openLinkBankOrWalletDialog,
+                          icon: const Icon(Icons.account_balance),
+                          label: Text(_linkedAccount.isEmpty
+                              ? 'ربط بنك / محفظة'
+                              : 'تغيير الحساب'),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -2140,51 +2152,40 @@ class _WalletTabState extends State {
                             backgroundColor: Colors.white,
                             foregroundColor: const Color(0xFF006A4E),
                           ),
-                          onPressed: () => _openTransferDialog(),
-                          icon: const Icon(Icons.send),
-                          label: const Text('تحويل فوري'),
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (ctx) => Scaffold(
+                                  appBar: AppBar(
+                                      title:
+                                          const Text('امسح باركود الدفع')),
+                                  body: MobileScanner(
+                                    onDetect: (cap) {
+                                      if (cap.barcodes.isNotEmpty &&
+                                          cap.barcodes.first.rawValue !=
+                                              null) {
+                                        final raw =
+                                            cap.barcodes.first.rawValue!;
+                                        Navigator.pop(ctx);
+                                        String phone = raw;
+                                        if (raw.contains('EGMASR-UID-')) {
+                                          phone = raw.split('-')[2];
+                                        }
+                                        _openDirectTransferDialog(
+                                            targetAcc: phone);
+                                      }
+                                    },
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.qr_code_scanner),
+                          label: const Text('ادفع بمسح QR'),
                         ),
                       ),
                     ],
-                  ),
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.white,
-                        side: const BorderSide(color: Colors.white54),
-                      ),
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (ctx) => Scaffold(
-                              appBar: AppBar(
-                                  title: const Text('امسح باركود المستلم')),
-                              body: MobileScanner(
-                                onDetect: (cap) {
-                                  if (cap.barcodes.isNotEmpty &&
-                                      cap.barcodes.first.rawValue != null) {
-                                    final raw = cap.barcodes.first.rawValue!;
-                                    Navigator.pop(ctx);
-                                    String phone = raw;
-                                    if (raw.contains('ACC=')) {
-                                      phone = raw
-                                          .split('ACC=')[1]
-                                          .split('&')[0];
-                                    }
-                                    _openTransferDialog(prefilledPhone: phone);
-                                  }
-                                },
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                      icon: const Icon(Icons.qr_code_scanner),
-                      label: const Text('الدفع بمسح باركود QR'),
-                    ),
                   ),
                 ],
               ),
@@ -2198,44 +2199,33 @@ class _WalletTabState extends State {
               padding: const EdgeInsets.all(16),
               child: Column(
                 children: [
-                  const Text('الباركود الخاص بحسابك (EG MASR QR)',
+                  const Text('الباركود الفريد الخاص بك (غير قابل للتكرار)',
                       style: TextStyle(fontWeight: FontWeight.bold)),
                   const SizedBox(height: 8),
-                  QrImageView(data: uniqueQrPayload, size: 160),
-                  Text(w.currentUserPhone,
-                      style: const TextStyle(color: Colors.grey)),
+                  if (_uniqueQrToken.isNotEmpty)
+                    QrImageView(data: _uniqueQrToken, size: 170),
+                  Text(_uniqueQrToken,
+                      style: const TextStyle(fontSize: 10, color: Colors.grey)),
                 ],
               ),
             ),
           ),
           const SizedBox(height: 16),
-          const Text('سجل العمليات المالية وكشف الحساب',
+          const Text('سجل المدفوعات المباشرة',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
-          ..._txHistory.map((tx) {
-            final isOut = tx['sender_phone'] == w.currentUserPhone;
-            return Card(
-              child: ListTile(
-                leading: CircleAvatar(
-                  backgroundColor:
-                      isOut ? Colors.red.shade50 : Colors.green.shade50,
-                  child: Icon(
-                    isOut ? Icons.arrow_upward : Icons.arrow_downward,
-                    color: isOut ? Colors.red : Colors.green,
+          ..._txHistory.map((tx) => Card(
+                child: ListTile(
+                  leading: const CircleAvatar(
+                    backgroundColor: Color(0xFF006A4E),
+                    child: Icon(Icons.swap_horiz, color: Colors.white),
                   ),
+                  title: Text(tx['note'] ?? ''),
+                  subtitle: Text('مرجع: #${tx['ref_code']}'),
+                  trailing: Text('${tx['amount']} ج.م',
+                      style: const TextStyle(fontWeight: FontWeight.bold)),
                 ),
-                title: Text(tx['note'] ?? ''),
-                subtitle: Text('مرجع: #${tx['ref_code']}'),
-                trailing: Text(
-                  '${isOut ? '-' : '+'}${tx['amount']} ج.م',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: isOut ? Colors.red : Colors.green,
-                  ),
-                ),
-              ),
-            );
-          }),
+              )),
         ],
       ),
     );
@@ -2423,7 +2413,7 @@ class _AdminGovernanceScreenState extends State {
 }
 
 // ============================================================================
-// 6. IN-APP DIRECT SERVICES (ROYAL EMERALD/GOLD HOTELS + IN-APP RESTAURANTS)
+// 6. SERVICES TAB (GOOGLE RESTAURANTS + UBER RIDES + TALABAT + CAPTAIN + TRACK)
 // ============================================================================
 class ServicesTab extends StatelessWidget {
   final String currentUserPhone;
@@ -2434,344 +2424,65 @@ class ServicesTab extends StatelessWidget {
     required this.isCorporate,
   });
 
-  Future _chargeUserWalletAndLog(BuildContext context, double amount,
+  Future _logDirectServicePayment(BuildContext context, double amount,
       String serviceName, String details) async {
-    try {
-      final prof = await supabase
-          .from('profiles')
-          .select()
-          .eq('phone', currentUserPhone)
-          .maybeSingle();
-      final currentBal = (prof?['balance'] ?? 0.0).toDouble();
-      if (currentBal < amount) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                  'رصيدك الحالي ($currentBal ج.م) غير كافٍ لإتمام العملية ($amount ج.م). اشحن محفظتك أولاً!'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
-        return false;
-      }
-
-      final newBal = currentBal - amount;
-      final ref = 'EGM${Random().nextInt(899999) + 100000}';
-      await supabase
-          .from('profiles')
-          .update({'balance': newBal}).eq('phone', currentUserPhone);
-      await supabase.from('transactions').insert({
-        'ref_code': ref,
-        'sender_phone': currentUserPhone,
-        'receiver_phone': 'EG_MASR_DIRECT',
-        'amount': amount,
-        'tx_type': 'service',
-        'note': '$serviceName ($details)',
-      });
-
+    final prefs = await SharedPreferences.getInstance();
+    final linked = prefs.getString('direct_linked_$currentUserPhone') ?? '';
+    if (linked.isEmpty) {
       if (context.mounted) {
-        showDialog(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            backgroundColor: const Color(0xFF004D38),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            title: const Row(
-              children: [
-                Icon(Icons.check_circle, color: Color(0xFFD4AF37)),
-                SizedBox(width: 8),
-                Text('تأكيد تنفيذ مباشر - EG MASR',
-                    style: TextStyle(color: Color(0xFFD4AF37), fontSize: 16)),
-              ],
-            ),
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
             content: Text(
-              'الخدمة: $serviceName\nالتفاصيل: $details\nالمبلغ المخصوم: ${amount.toStringAsFixed(2)} ج.م\nالرصيد المتبقي: ${newBal.toStringAsFixed(2)} ج.م\nرقم المرجع: #$ref',
-              style: const TextStyle(color: Colors.white, height: 1.5),
-            ),
-            actions: [
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFD4AF37),
-                    foregroundColor: Colors.black),
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('تم'),
-              ),
-            ],
+                'يرجى ربط حسابك البنكي أو محفظتك من تبويب (الدفع والباركود) أولاً!'),
+            backgroundColor: Colors.red,
           ),
         );
       }
-      return true;
-    } catch (_) {
       return false;
     }
-  }
 
-  void _openRoyalHotelEngine(BuildContext context) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => RoyalHotelsBookingScreen(
-          onBookHotel: (hotelName, details, totalPrice) =>
-              _chargeUserWalletAndLog(
-                  context, totalPrice, 'حجز فندق: $hotelName', details),
-        ),
-      ),
-    );
-  }
+    final ref = 'EGM${Random().nextInt(899999) + 100000}';
+    await supabase.from('transactions').insert({
+      'ref_code': ref,
+      'sender_phone': currentUserPhone,
+      'receiver_phone': 'EG_MASR_GATEWAY',
+      'amount': amount,
+      'tx_type': 'service',
+      'note': '$serviceName ($details) - خصم من $linked',
+    });
 
-  void _openInAppFawryBillScreen(
-      BuildContext context, String title, String inputLabel) {
-    final accCtrl = TextEditingController();
-    double? fetchedBillAmount;
-    bool queried = false;
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (ctx) => StatefulBuilder(
-          builder: (ctx, setSt) => Scaffold(
-            appBar: AppBar(title: Text('$title - مباشر')),
-            body: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  TextField(
-                    controller: accCtrl,
-                    keyboardType: TextInputType.number,
-                    decoration: InputDecoration(
-                      labelText: inputLabel,
-                      border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(14)),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF006A4E),
-                        foregroundColor: Colors.white,
-                      ),
-                      onPressed: () {
-                        if (accCtrl.text.trim().length < 5) return;
-                        setSt(() {
-                          queried = true;
-                          fetchedBillAmount =
-                              (65 + Random().nextInt(280)).toDouble();
-                        });
-                      },
-                      child: const Text('استعلام فوري عن القيمة'),
-                    ),
-                  ),
-                  if (queried && fetchedBillAmount != null) ...[
-                    const SizedBox(height: 20),
-                    Card(
-                      color: Colors.green.shade50,
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('رقم الحساب: ${accCtrl.text}'),
-                            Text(
-                                'المبلغ المطلوب: ${fetchedBillAmount!.toStringAsFixed(2)} ج.م',
-                                style: const TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                    color: Color(0xFF006A4E))),
-                            const SizedBox(height: 12),
-                            SizedBox(
-                              width: double.infinity,
-                              child: ElevatedButton(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: const Color(0xFFD4AF37),
-                                  foregroundColor: Colors.black,
-                                ),
-                                onPressed: () async {
-                                  final ok = await _chargeUserWalletAndLog(
-                                    context,
-                                    fetchedBillAmount!,
-                                    title,
-                                    'رقم ${accCtrl.text}',
-                                  );
-                                  if (ok && ctx.mounted) Navigator.pop(ctx);
-                                },
-                                child: const Text('سداد مباشر من المحفظة'),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
+    if (context.mounted) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF004D38),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Row(
+            children: [
+              Icon(Icons.check_circle, color: Color(0xFFD4AF37)),
+              SizedBox(width: 8),
+              Text('إيصال دفع مباشر - EG MASR',
+                  style: TextStyle(color: Color(0xFFD4AF37), fontSize: 16)),
+            ],
           ),
-        ),
-      ),
-    );
-  }
-
-  void _openInAppGameTopupScreen(BuildContext context, bool isPubg) {
-    final playerIdCtrl = TextEditingController();
-    final packages = isPubg
-        ? [
-            {'name': '60 شدة PUBG UC', 'price': 45.0},
-            {'name': '325 شدة PUBG UC', 'price': 220.0},
-            {'name': '660 شدة PUBG UC', 'price': 430.0},
-          ]
-        : [
-            {'name': '100 جوهرة Free Fire', 'price': 40.0},
-            {'name': '310 جوهرة Free Fire', 'price': 115.0},
-            {'name': '520 جوهرة Free Fire', 'price': 190.0},
-          ];
-    int selectedIdx = 0;
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (ctx) => StatefulBuilder(
-          builder: (ctx, setSt) => Scaffold(
-            appBar: AppBar(
-                title: Text(isPubg
-                    ? 'شحن شدات ببجي PUBG المباشر'
-                    : 'شحن جواهر فري فاير المباشر')),
-            body: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                children: [
-                  TextField(
-                    controller: playerIdCtrl,
-                    keyboardType: TextInputType.number,
-                    decoration: InputDecoration(
-                      labelText: 'أدخل معرف اللاعب (Player ID)',
-                      border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(14)),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  ...List.generate(packages.length, (i) {
-                    final pkg = packages[i];
-                    return RadioListTile(
-                      value: i,
-                      groupValue: selectedIdx,
-                      title: Text(pkg['name'] as String),
-                      subtitle: Text('${pkg['price']} ج.م'),
-                      onChanged: (v) {
-                        if (v != null) setSt(() => selectedIdx = v as int);
-                      },
-                    );
-                  }),
-                  const Spacer(),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 50,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF006A4E),
-                        foregroundColor: Colors.white,
-                      ),
-                      onPressed: () async {
-                        if (playerIdCtrl.text.trim().length < 5) return;
-                        final chosen = packages[selectedIdx];
-                        final ok = await _chargeUserWalletAndLog(
-                          context,
-                          chosen['price'] as double,
-                          chosen['name'] as String,
-                          'ID: ${playerIdCtrl.text.trim()}',
-                        );
-                        if (ok && ctx.mounted) Navigator.pop(ctx);
-                      },
-                      child: const Text('تأكيد الشحن الفوري المباشر'),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+          content: Text(
+            'الخدمة: $serviceName\nالتفاصيل: $details\nالمبلغ: ${amount.toStringAsFixed(2)} ج.م\nتم الخصم من: $linked\nالمرجع: #$ref',
+            style: const TextStyle(color: Colors.white, height: 1.5),
           ),
-        ),
-      ),
-    );
-  }
-
-  void _openInAppTrainBookingScreen(BuildContext context) {
-    String fromStation = 'القاهرة (رمسيس)';
-    String toStation = 'الإسكندرية';
-    double ticketPrice = 185.0;
-    final stations = [
-      'القاهرة (رمسيس)',
-      'الإسكندرية',
-      'الزقازيق',
-      'طنطا',
-      'المنصورة',
-      'أسيوط',
-      'الأقصر',
-      'أسوان',
-    ];
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (ctx) => StatefulBuilder(
-          builder: (ctx, setSt) => Scaffold(
-            appBar: AppBar(title: const Text('حجز قطارات مصر المباشر')),
-            body: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                children: [
-                  DropdownButtonFormField(
-                    value: fromStation,
-                    decoration: const InputDecoration(labelText: 'محطة القيام'),
-                    items: stations
-                        .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                        .toList(),
-                    onChanged: (v) {
-                      if (v != null) setSt(() => fromStation = v.toString());
-                    },
-                  ),
-                  const SizedBox(height: 14),
-                  DropdownButtonFormField(
-                    value: toStation,
-                    decoration: const InputDecoration(labelText: 'محطة الوصول'),
-                    items: stations
-                        .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                        .toList(),
-                    onChanged: (v) {
-                      if (v != null) setSt(() => toStation = v.toString());
-                    },
-                  ),
-                  const Spacer(),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 50,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF006A4E),
-                        foregroundColor: Colors.white,
-                      ),
-                      onPressed: () async {
-                        final ok = await _chargeUserWalletAndLog(
-                          context,
-                          ticketPrice,
-                          'تذكرة قطار ($fromStation ⬅️ $toStation)',
-                          'درجة أولى مكيفة VIP',
-                        );
-                        if (ok && ctx.mounted) Navigator.pop(ctx);
-                      },
-                      child: Text('حجز وإصدار التذكرة فوراً ($ticketPrice ج.م)'),
-                    ),
-                  ),
-                ],
-              ),
+          actions: [
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFD4AF37),
+                  foregroundColor: Colors.black),
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('تم'),
             ),
-          ),
+          ],
         ),
-      ),
-    );
+      );
+    }
+    return true;
   }
 
   @override
@@ -2782,10 +2493,8 @@ class ServicesTab extends StatelessWidget {
         'cat': 'مشويات وطواجن مصرية أصيلة',
         'rating': '4.9',
         'address': '151 شارع عبيد، روض الفرج، شبرا، القاهرة',
-        'hours': '11:00 صباحاً - 3:00 صباحاً',
-        'desc':
-            'أشهر مطعم مشويات وطواجن في مصر، يشتهر بالملوخية المصرية بالثوم والطواجن الفلاحي والمشويات على الفحم بأجود أنواع اللحوم البلدية.',
-        'menu': '• صينية مشويات مشكلة: 650 ج.م\n• طاجن عكاوي بالبصل: 240 ج.م\n• ملوخية صبحي كابر: 75 ج.م',
+        'googleUrl':
+            'https://www.google.com/search?q=%D9%85%D8%B7%D8%B9%D9%85+%D8%B5%D8%A8%D8%AD%D9%8A+%D9%83%D8%A7%D8%A8%D8%B1+%D8%A7%D9%84%D8%B1%D8%B3%D9%85%D9%8A',
         'image':
             'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=800',
       },
@@ -2794,10 +2503,8 @@ class ServicesTab extends StatelessWidget {
         'cat': 'مشويات فاخرة وضيافة ملكية',
         'rating': '4.8',
         'address': 'التجمع الخامس / الشيخ زايد / مدينة نصر',
-        'hours': '12:00 ظهراً - 2:00 صباحاً',
-        'desc':
-            'تجربة ضيافة ملكية فاخرة وقاعات عائلية وكبار الزوار (VIP) مع تشكيلة واسعة من الكباب والكفتة والريش الضاني والمقبلات الشرقية.',
-        'menu': '• كيلو كباب وكفتة ملكي: 820 ج.م\n• ريش ضاني مشوية: 480 ج.م\n• حمام محشي فريك: 195 ج.م',
+        'googleUrl':
+            'https://www.google.com/search?q=%D9%85%D8%B7%D8%B9%D9%85+%D9%82%D8%B5%D8%B1+%D8%A7%D9%84%D9%83%D8%A8%D8%A7%D8%A8%D8%AC%D9%8A+%D8%A7%D9%84%D9%85%D9%88%D9%82%D8%B9+%D8%A7%D9%84%D8%B1%D8%B3%D9%85%D9%8A',
         'image':
             'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800',
       },
@@ -2806,106 +2513,166 @@ class ServicesTab extends StatelessWidget {
         'cat': 'أعرق مطاعم المشويات في مصر منذ 1947',
         'rating': '4.7',
         'address': '69 شارع القصر العيني، جاردن سيتي، القاهرة',
-        'hours': '10:00 صباحاً - 2:00 صباحاً',
-        'desc':
-            'تاريخ عريق في تقديم أشهى الأطباق والمشويات المصرية الأصيلة في قلب القاهرة بإطلالة مميزة وخدمة راقية.',
-        'menu': '• وجبة أبو شقرة الخاصة: 390 ج.م\n• طاجن بامية باللحم الضاني: 220 ج.م\n• أم علي بالمكسرات: 85 ج.م',
+        'googleUrl':
+            'https://www.google.com/search?q=%D9%85%D8%B7%D8%B9%D9%85+%D8%A7%D8%A8%D9%88+%D8%B4%D9%82%D8%B1%D8%A9+%D8%A7%D9%84%D9%85%D9%88%D9%82%D8%B9+%D8%A7%D9%84%D8%B1%D8%B3%D9%85%D9%8A',
         'image':
             'https://images.unsplash.com/photo-1544025162-d76694265947?w=800',
       },
     ];
 
     return Scaffold(
-      appBar: AppBar(title: const Text('خدمات وحجوزات EG MASR')),
+      appBar: AppBar(title: const Text('خدمات وتوصيل EG MASR')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // UBER RIDES + TALABAT DELIVERY + CAPTAIN + TRACK ORDER
           Container(
-            padding: const EdgeInsets.all(18),
+            padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               gradient: const LinearGradient(
                 colors: [Color(0xFF004D38), Color(0xFF006A4E)],
-                begin: Alignment.topRight,
-                end: Alignment.bottomLeft,
               ),
               borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: const Color(0xFFD4AF37), width: 1.5),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Row(
+                const Text(
+                  'خدمة التوصيل والمشاوير الذكية 🚗🏍️',
+                  style: TextStyle(
+                      color: Color(0xFFD4AF37),
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'توصيل أفراد (سيارة / موتوسيكل مثل أوبر) أو توصيل طلبات (مثل طلبات) مع تتبع لحظي.',
+                  style: TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+                const SizedBox(height: 12),
+                Row(
                   children: [
-                    Icon(Icons.villa, color: Color(0xFFD4AF37), size: 30),
-                    SizedBox(width: 8),
-                    Text(
-                      'إقامات وفنادق EG MASR الفاخرة',
-                      style: TextStyle(
-                          color: Color(0xFFD4AF37),
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFD4AF37),
+                          foregroundColor: Colors.black,
+                        ),
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => RideAndTalabatScreen(
+                                customerPhone: currentUserPhone,
+                                initialMode: 'ride',
+                              ),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.directions_car),
+                        label: const Text('توصيل أفراد'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          foregroundColor: const Color(0xFF006A4E),
+                        ),
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => RideAndTalabatScreen(
+                                customerPhone: currentUserPhone,
+                                initialMode: 'talabat',
+                              ),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.delivery_dining),
+                        label: const Text('توصيل طلبات'),
+                      ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
-                const Text(
-                  'حجز مباشر سريع: حدد الوجهة، تاريخ وساعة الوصول والمغادرة، عدد النزلاء وأعمارهم واحجز فندقك فوراً.',
-                  style: TextStyle(color: Colors.white70, fontSize: 12),
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFD4AF37),
-                      foregroundColor: Colors.black,
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white,
+                          side: const BorderSide(color: Colors.white54),
+                        ),
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => CaptainPortalScreen(
+                                  captainPhone: currentUserPhone),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.two_wheeler),
+                        label: const Text('سجّل ككابتن'),
+                      ),
                     ),
-                    onPressed: () => _openRoyalHotelEngine(context),
-                    icon: const Icon(Icons.search),
-                    label: const Text('استكشاف وحجز الفنادق مباشرة',
-                        style: TextStyle(fontWeight: FontWeight.bold)),
-                  ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFFD4AF37),
+                          side: const BorderSide(color: Color(0xFFD4AF37)),
+                        ),
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => TrackOrderScreen(
+                                  userPhone: currentUserPhone),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.track_changes),
+                        label: const Text('تابع طلبك'),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 18),
-          const Text('خدمات الدفع والشحن المباشر',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 10),
-          GridView.count(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            crossAxisCount: 2,
-            childAspectRatio: 1.6,
-            crossAxisSpacing: 10,
-            mainAxisSpacing: 10,
-            children: [
-              _serviceTile(
-                  Icons.electric_bolt,
-                  'فواتير الكهرباء',
-                  () => _openInAppFawryBillScreen(
-                      context, 'فاتورة الكهرباء', 'رقم السداد الإلكتروني')),
-              _serviceTile(
-                  Icons.phone_android,
-                  'شحن رصيد / باقات',
-                  () => _openInAppFawryBillScreen(
-                      context, 'شحن رصيد موبايل', 'رقم الموبايل')),
-              _serviceTile(Icons.sports_esports, 'شدات ببجي PUBG',
-                  () => _openInAppGameTopupScreen(context, true)),
-              _serviceTile(Icons.videogame_asset, 'جواهر فري فاير',
-                  () => _openInAppGameTopupScreen(context, false)),
-              _serviceTile(Icons.train, 'قطارات مصر',
-                  () => _openInAppTrainBookingScreen(context)),
-              _serviceTile(
-                  Icons.flight_takeoff,
-                  'حجز طيران مباشر',
-                  () => _openInAppFawryBillScreen(
-                      context, 'حجز تذكرة طيران', 'رقم جواز السفر / الرقم القومي')),
-            ],
+          const SizedBox(height: 16),
+          // ROYAL HOTELS CARD
+          Card(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+            child: ListTile(
+              leading: const CircleAvatar(
+                backgroundColor: Color(0xFF004D38),
+                child: Icon(Icons.villa, color: Color(0xFFD4AF37)),
+              ),
+              title: const Text('حجز الفنادق والإقامات',
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+              subtitle: const Text('حدد الوجهة، التاريخ بالساعة، والأعمار'),
+              trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => RoyalHotelsBookingScreen(
+                      onBookHotel: (h, d, p) =>
+                          _logDirectServicePayment(context, p, 'فندق: $h', d),
+                    ),
+                  ),
+                );
+              },
+            ),
           ),
-          const SizedBox(height: 22),
-          const Text('أشهر المطاعم الحقيقية في مصر (معاينة وحجز مباشر)',
+          const SizedBox(height: 18),
+          const Text('أشهر المطاعم الحقيقية (معاينة جوجل وحجز)',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
           const SizedBox(height: 10),
           ...realRestaurants.map((place) => Card(
@@ -2917,7 +2684,7 @@ class ServicesTab extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Image.network(place['image']!,
-                        height: 145, width: double.infinity, fit: BoxFit.cover),
+                        height: 140, width: double.infinity, fit: BoxFit.cover),
                     Padding(
                       padding: const EdgeInsets.all(14),
                       child: Column(
@@ -2936,21 +2703,11 @@ class ServicesTab extends StatelessWidget {
                             children: [
                               Expanded(
                                 child: OutlinedButton.icon(
-                                  onPressed: () {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) =>
-                                            InAppRestaurantPreviewScreen(
-                                          place: place,
-                                          onBookNow: () =>
-                                              _openRestaurantBookingForm(
-                                                  context, place['name']!),
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                  icon: const Icon(Icons.visibility, size: 18),
+                                  onPressed: () => launchUrl(
+                                      Uri.parse(place['googleUrl']!),
+                                      mode: LaunchMode.externalApplication),
+                                  icon: const Icon(Icons.travel_explore,
+                                      size: 18),
                                   label: const Text('معاينة المطعم'),
                                 ),
                               ),
@@ -2964,7 +2721,7 @@ class ServicesTab extends StatelessWidget {
                                   onPressed: () => _openRestaurantBookingForm(
                                       context, place['name']!),
                                   icon: const Icon(Icons.event_seat, size: 18),
-                                  label: const Text('حجز طاولة'),
+                                  label: const Text('حجز'),
                                 ),
                               ),
                             ],
@@ -2980,26 +2737,6 @@ class ServicesTab extends StatelessWidget {
     );
   }
 
-  Widget _serviceTile(IconData icon, String title, VoidCallback onTap) {
-    return Card(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(14),
-        onTap: onTap,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: const Color(0xFF006A4E), size: 30),
-            const SizedBox(height: 6),
-            Text(title,
-                style:
-                    const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
-          ],
-        ),
-      ),
-    );
-  }
-
   void _openRestaurantBookingForm(BuildContext context, String restName) {
     final guestsCtrl = TextEditingController(text: '4');
     DateTime selectedDate = DateTime.now().add(const Duration(days: 1));
@@ -3009,7 +2746,7 @@ class ServicesTab extends StatelessWidget {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSt) => AlertDialog(
-          title: Text('حجز مباشر في $restName'),
+          title: Text('حجز طاولة في $restName'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -3036,7 +2773,7 @@ class ServicesTab extends StatelessWidget {
               ),
               ListTile(
                 leading: const Icon(Icons.access_time),
-                title: Text('الساعة: ${selectedTime.format(ctx)}'),
+                title: Text('الوقت: ${selectedTime.format(ctx)}'),
                 onTap: () async {
                   final t = await showTimePicker(
                       context: ctx, initialTime: selectedTime);
@@ -3073,93 +2810,430 @@ class ServicesTab extends StatelessWidget {
   }
 }
 
-class InAppRestaurantPreviewScreen extends StatelessWidget {
-  final Map place;
-  final VoidCallback onBookNow;
-  const InAppRestaurantPreviewScreen({
+// ============================================================================
+// 7. UBER RIDES & TALABAT DELIVERY SCREEN + CAPTAIN REGISTRATION + TRACKING
+// ============================================================================
+class RideAndTalabatScreen extends StatefulWidget {
+  final String customerPhone;
+  final String initialMode;
+  const RideAndTalabatScreen({
     super.key,
-    required this.place,
-    required this.onBookNow,
+    required this.customerPhone,
+    required this.initialMode,
   });
 
   @override
+  State createState() => _RideAndTalabatScreenState();
+}
+
+class _RideAndTalabatScreenState extends State {
+  late String _mode;
+  String _vehicle = 'car';
+  final _pickupCtrl = TextEditingController();
+  final _dropoffCtrl = TextEditingController();
+  final _detailsCtrl = TextEditingController();
+
+  RideAndTalabatScreen get w => widget as RideAndTalabatScreen;
+
+  @override
+  void initState() {
+    super.initState();
+    _mode = w.initialMode;
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final estPrice = _vehicle == 'car' ? 65.0 : 35.0;
+
     return Scaffold(
-      appBar: AppBar(title: Text(place['name'] ?? '')),
-      body: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Image.network(place['image'] ?? '',
-                height: 220, width: double.infinity, fit: BoxFit.cover),
-            Padding(
-              padding: const EdgeInsets.all(18),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: Text(place['name'] ?? '',
-                            style: const TextStyle(
-                                fontSize: 20, fontWeight: FontWeight.bold)),
-                      ),
-                      Chip(
-                        backgroundColor: const Color(0xFFD4AF37),
-                        label: Text('⭐ ${place['rating']}',
-                            style:
-                                const TextStyle(fontWeight: FontWeight.bold)),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Text('📍 ${place['address']}'),
-                  Text('🕒 مواعيد العمل: ${place['hours']}',
-                      style: const TextStyle(color: Colors.grey)),
-                  const Divider(height: 24),
-                  const Text('نبذة عن المطعم:',
-                      style:
-                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 6),
-                  Text(place['desc'] ?? '', style: const TextStyle(height: 1.5)),
-                  const Divider(height: 24),
-                  const Text('أشهر الأصناف والأسعار:',
-                      style:
-                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 6),
-                  Text(place['menu'] ?? '', style: const TextStyle(height: 1.6)),
-                  const SizedBox(height: 24),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 50,
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF006A4E),
-                        foregroundColor: Colors.white,
-                      ),
-                      onPressed: () {
-                        Navigator.pop(context);
-                        onBookNow();
-                      },
-                      icon: const Icon(Icons.event_seat),
-                      label: const Text('احجز طاولتك الآن في هذا المطعم',
-                          style: TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.bold)),
-                    ),
-                  ),
-                ],
+      appBar: AppBar(
+        title: Text(_mode == 'ride'
+            ? 'توصيل أفراد (مشوار)'
+            : 'توصيل طلبات (دليفري)'),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: ChoiceChip(
+                  label: const Center(child: Text('توصيل أفراد 🚕')),
+                  selected: _mode == 'ride',
+                  onSelected: (_) => setState(() => _mode = 'ride'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: ChoiceChip(
+                  label: const Center(child: Text('توصيل طلبات 🍔')),
+                  selected: _mode == 'talabat',
+                  onSelected: (_) => setState(() => _mode = 'talabat'),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          const Text('اختر وسيلة التوصيل:',
+              style: TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: ChoiceChip(
+                  label: const Center(child: Text('سيارة 🚗 (65 ج.م)')),
+                  selected: _vehicle == 'car',
+                  onSelected: (_) => setState(() => _vehicle = 'car'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: ChoiceChip(
+                  label: const Center(child: Text('موتوسيكل 🏍️ (35 ج.م)')),
+                  selected: _vehicle == 'motorcycle',
+                  onSelected: (_) => setState(() => _vehicle = 'motorcycle'),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _pickupCtrl,
+            decoration: InputDecoration(
+              labelText: _mode == 'ride'
+                  ? 'نقطة الانطلاق (مكانك)'
+                  : 'اسم المطعم / المتجر أو مكان الاستلام',
+              prefixIcon: const Icon(Icons.my_location),
+              border:
+                  OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _dropoffCtrl,
+            decoration: InputDecoration(
+              labelText: 'عنوان الوصول / التسليم',
+              prefixIcon: const Icon(Icons.location_on),
+              border:
+                  OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+          ),
+          if (_mode == 'talabat') ...[
+            const SizedBox(height: 12),
+            TextField(
+              controller: _detailsCtrl,
+              maxLines: 2,
+              decoration: InputDecoration(
+                labelText: 'تفاصيل الطلبات المطلوب شراؤها أو توصيلها',
+                prefixIcon: const Icon(Icons.shopping_bag),
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
               ),
             ),
           ],
-        ),
+          const SizedBox(height: 20),
+          SizedBox(
+            height: 50,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF006A4E),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () async {
+                if (_pickupCtrl.text.trim().isEmpty ||
+                    _dropoffCtrl.text.trim().isEmpty) {
+                  return;
+                }
+                final code = 'ORD-${Random().nextInt(89999) + 10000}';
+                await supabase.from('delivery_orders').insert({
+                  'order_code': code,
+                  'customer_phone': w.customerPhone,
+                  'service_type': _mode,
+                  'vehicle_type': _vehicle,
+                  'pickup_location': _pickupCtrl.text.trim(),
+                  'dropoff_location': _dropoffCtrl.text.trim(),
+                  'details': _detailsCtrl.text.trim(),
+                  'price': estPrice,
+                  'status': 'searching',
+                });
+                if (mounted) {
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          TrackOrderScreen(userPhone: w.customerPhone),
+                    ),
+                  );
+                }
+              },
+              icon: const Icon(Icons.check_circle),
+              label: Text('تأكيد الطلب الآن ($estPrice ج.م)'),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
+class CaptainPortalScreen extends StatefulWidget {
+  final String captainPhone;
+  const CaptainPortalScreen({super.key, required this.captainPhone});
+
+  @override
+  State createState() => _CaptainPortalScreenState();
+}
+
+class _CaptainPortalScreenState extends State {
+  final _nameCtrl = TextEditingController();
+  final _plateCtrl = TextEditingController();
+  final _licenseCtrl = TextEditingController();
+  String _vehicle = 'motorcycle';
+  Map? _captainProfile;
+  List _availableOrders = [];
+
+  CaptainPortalScreen get w => widget as CaptainPortalScreen;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCaptain();
+  }
+
+  Future _loadCaptain() async {
+    try {
+      final cap = await supabase
+          .from('captains')
+          .select()
+          .eq('phone', w.captainPhone)
+          .maybeSingle();
+      final orders = await supabase
+          .from('delivery_orders')
+          .select()
+          .order('created_at', ascending: false);
+      if (mounted) {
+        setState(() {
+          _captainProfile = cap;
+          _availableOrders = List.from(orders);
+        });
+      }
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('بوابة الكباتن (سيارة / موتوسيكل)')),
+      body: _captainProfile == null
+          ? ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                const Text('سجّل الآن ككابتن توصيل أفراد وطلبات:',
+                    style:
+                        TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _nameCtrl,
+                  decoration: const InputDecoration(
+                      labelText: 'اسم الكابتن بالكامل',
+                      border: OutlineInputBorder()),
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField(
+                  value: _vehicle,
+                  decoration: const InputDecoration(
+                      labelText: 'نوع المركبة', border: OutlineInputBorder()),
+                  items: const [
+                    DropdownMenuItem(
+                        value: 'motorcycle', child: Text('موتوسيكل 🏍️')),
+                    DropdownMenuItem(value: 'car', child: Text('سيارة 🚗')),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) setState(() => _vehicle = v.toString());
+                  },
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _plateCtrl,
+                  decoration: const InputDecoration(
+                      labelText: 'رقم اللوحة المعدنية',
+                      border: OutlineInputBorder()),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _licenseCtrl,
+                  decoration: const InputDecoration(
+                      labelText: 'رقم رخصة القيادة',
+                      border: OutlineInputBorder()),
+                ),
+                const SizedBox(height: 16),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF006A4E),
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size(double.infinity, 48),
+                  ),
+                  onPressed: () async {
+                    if (_nameCtrl.text.trim().isEmpty ||
+                        _plateCtrl.text.trim().isEmpty) {
+                      return;
+                    }
+                    await supabase.from('captains').insert({
+                      'phone': w.captainPhone,
+                      'full_name': _nameCtrl.text.trim(),
+                      'vehicle_type': _vehicle,
+                      'plate_number': _plateCtrl.text.trim(),
+                      'license_number': _licenseCtrl.text.trim(),
+                    });
+                    _loadCaptain();
+                  },
+                  child: const Text('تفعيل حساب الكابتن فوراً'),
+                ),
+              ],
+            )
+          : ListView(
+              padding: const EdgeInsets.all(14),
+              children: [
+                Card(
+                  color: const Color(0xFF004D38),
+                  child: ListTile(
+                    leading: const Icon(Icons.verified,
+                        color: Color(0xFFD4AF37), size: 32),
+                    title: Text('كابتن: ${_captainProfile!['full_name']}',
+                        style: const TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.bold)),
+                    subtitle: Text(
+                        'المركبة: ${_captainProfile!['vehicle_type'] == 'car' ? 'سيارة' : 'موتوسيكل'} | لوحة: ${_captainProfile!['plate_number']}',
+                        style: const TextStyle(color: Colors.white70)),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text('الطلبات المتاحة للتنفيذ:',
+                    style:
+                        TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                ..._availableOrders.map((o) => Card(
+                      child: ListTile(
+                        title: Text(
+                            '${o['order_code']} • ${o['service_type'] == 'ride' ? 'توصيل أفراد' : 'طلبات'}'),
+                        subtitle: Text(
+                            'من: ${o['pickup_location']}\nإلى: ${o['dropoff_location']}\nالحالة: ${o['status']}'),
+                        trailing: ElevatedButton(
+                          onPressed: () async {
+                            final nextStatus = o['status'] == 'searching'
+                                ? 'on_the_way'
+                                : 'delivered';
+                            await supabase.from('delivery_orders').update({
+                              'captain_phone': w.captainPhone,
+                              'status': nextStatus,
+                            }).eq('id', o['id']);
+                            _loadCaptain();
+                          },
+                          child: Text(o['status'] == 'searching'
+                              ? 'قبول'
+                              : o['status'] == 'on_the_way'
+                                  ? 'تم التسليم'
+                                  : 'مكتمل ✅'),
+                        ),
+                      ),
+                    )),
+              ],
+            ),
+    );
+  }
+}
+
+class TrackOrderScreen extends StatefulWidget {
+  final String userPhone;
+  const TrackOrderScreen({super.key, required this.userPhone});
+
+  @override
+  State createState() => _TrackOrderScreenState();
+}
+
+class _TrackOrderScreenState extends State {
+  List _myOrders = [];
+
+  TrackOrderScreen get w => widget as TrackOrderScreen;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadOrders();
+  }
+
+  Future _loadOrders() async {
+    try {
+      final res = await supabase
+          .from('delivery_orders')
+          .select()
+          .eq('customer_phone', w.userPhone)
+          .order('created_at', ascending: false);
+      if (mounted) setState(() => _myOrders = List.from(res));
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('تابع طلبك لحظة بلحظة'),
+        actions: [
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadOrders),
+        ],
+      ),
+      body: _myOrders.isEmpty
+          ? const Center(child: Text('لا توجد طلبات توصيل حالياً'))
+          : ListView.builder(
+              padding: const EdgeInsets.all(14),
+              itemCount: _myOrders.length,
+              itemBuilder: (_, i) {
+                final o = _myOrders[i];
+                final st = o['status'] ?? 'searching';
+                final statusText = st == 'searching'
+                    ? '🔍 جاري البحث عن أقرب كابتن...'
+                    : st == 'on_the_way'
+                        ? '🚀 الكابتن في الطريق إليك (${o['captain_phone']})'
+                        : '✅ تم التوصيل بنجاح';
+
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(o['order_code'] ?? '',
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold, fontSize: 16)),
+                            Text('${o['price']} ج.م',
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF006A4E))),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Text('من: ${o['pickup_location']}'),
+                        Text('إلى: ${o['dropoff_location']}'),
+                        const Divider(),
+                        Text(statusText,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF004D38))),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+    );
+  }
+}
+
 // ============================================================================
-// 7. ROYAL EMERALD & GOLD HOTEL BOOKING ENGINE (DISTINCT DESIGN & FAST)
+// 8. ROYAL EMERALD & GOLD HOTEL BOOKING ENGINE
 // ============================================================================
 class RoyalHotelsBookingScreen extends StatefulWidget {
   final Future Function(String, String, double) onBookHotel;
@@ -3232,10 +3306,6 @@ class _RoyalHotelsBookingScreenState extends State {
                 colors: [Color(0xFF004D38), Color(0xFF006A4E)],
               ),
               borderRadius: BorderRadius.circular(22),
-              boxShadow: const [
-                BoxShadow(
-                    color: Colors.black12, blurRadius: 10, offset: Offset(0, 4))
-              ],
             ),
             child: Column(
               children: [
