@@ -102,7 +102,7 @@ class _AuthGateState extends State {
 }
 
 // ============================================================================
-// 1. LOGIN SCREEN (DYNAMIC RANDOM OTP + INDIVIDUAL & CORPORATE)
+// 1. LOGIN SCREEN (DYNAMIC OTP + INDIVIDUAL & CORPORATE)
 // ============================================================================
 class LoginScreen extends StatefulWidget {
   final Function(String, String) onLoginSuccess;
@@ -478,7 +478,7 @@ class _LoginScreenState extends State {
 }
 
 // ============================================================================
-// 2. MAIN HOME SHELL (4 TABS: CHATS/GROUPS, FEED, WALLET, SERVICES/BOOKING)
+// 2. MAIN HOME SHELL (ULTRA-FAST INDEXED STACK)
 // ============================================================================
 class MainHomeShell extends StatefulWidget {
   final String userPhone;
@@ -1283,8 +1283,6 @@ class SocialFeedTab extends StatefulWidget {
 
 class _SocialFeedTabState extends State {
   List _posts = [];
-  Set _friends = {};
-  Set _blocked = {};
   String _myName = 'مستخدم EG Masr';
   bool _loading = true;
 
@@ -1340,8 +1338,6 @@ class _SocialFeedTabState extends State {
 
       if (mounted) {
         setState(() {
-          _friends = fr;
-          _blocked = bl;
           _posts = filtered;
           _loading = false;
         });
@@ -1774,7 +1770,7 @@ class _SocialFeedTabState extends State {
 }
 
 // ============================================================================
-// 5. WALLET TAB (EG MASR QR + WALLETS + ADMIN REPORTS & COMPANIES)
+// 5. WALLET TAB + ADMIN CONTROL (COMPANIES & REPORTS ONLY)
 // ============================================================================
 class WalletTab extends StatefulWidget {
   final String currentUserPhone;
@@ -2045,7 +2041,8 @@ class _WalletTabState extends State {
               onPressed: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const AdminMasterScreen()),
+                  MaterialPageRoute(
+                      builder: (_) => const AdminGovernanceScreen()),
                 );
               },
             ),
@@ -2074,15 +2071,14 @@ class _WalletTabState extends State {
               child: ListTile(
                 leading: const Icon(Icons.admin_panel_settings,
                     color: Colors.black),
-                title: const Text(
-                    'لوحة تحكم الأدمن (الشركات • البلاغات • الطلبات)',
+                title: const Text('لوحة تحكم الأدمن (طلبات الشركات والبلاغات)',
                     style: TextStyle(fontWeight: FontWeight.bold)),
                 trailing: const Icon(Icons.arrow_forward_ios, size: 16),
                 onTap: () {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                        builder: (_) => const AdminMasterScreen()),
+                        builder: (_) => const AdminGovernanceScreen()),
                   );
                 },
               ),
@@ -2246,17 +2242,19 @@ class _WalletTabState extends State {
   }
 }
 
-class AdminMasterScreen extends StatefulWidget {
-  const AdminMasterScreen({super.key});
+// ============================================================================
+// ADMIN GOVERNANCE SCREEN (COMPANIES & REPORTS CONTROL ONLY)
+// ============================================================================
+class AdminGovernanceScreen extends StatefulWidget {
+  const AdminGovernanceScreen({super.key});
 
   @override
-  State createState() => _AdminMasterScreenState();
+  State createState() => _AdminGovernanceScreenState();
 }
 
-class _AdminMasterScreenState extends State {
+class _AdminGovernanceScreenState extends State {
   List _companies = [];
   List _reports = [];
-  List _orders = [];
 
   @override
   void initState() {
@@ -2274,16 +2272,10 @@ class _AdminMasterScreenState extends State {
           .from('reports')
           .select()
           .order('created_at', ascending: false);
-      final txs = await supabase
-          .from('transactions')
-          .select()
-          .eq('tx_type', 'service')
-          .order('created_at', ascending: false);
       if (mounted) {
         setState(() {
           _companies = List.from(comps);
           _reports = List.from(reps);
-          _orders = List.from(txs);
         });
       }
     } catch (_) {}
@@ -2292,95 +2284,137 @@ class _AdminMasterScreenState extends State {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 3,
+      length: 2,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('لوحة تحكم الأدمن الشاملة'),
+          title: const Text('إدارة الشركات والبلاغات (Admin)'),
           bottom: const TabBar(
             indicatorColor: Color(0xFFD4AF37),
             labelColor: Colors.white,
             tabs: [
-              Tab(text: 'الشركات'),
-              Tab(text: 'البلاغات 🚨'),
-              Tab(text: 'طلبات الشحن/الحجز'),
+              Tab(text: 'طلبات الشركات 🏢'),
+              Tab(text: 'البلاغات الواردة 🚨'),
             ],
           ),
         ),
         body: TabBarView(
           children: [
-            ListView.builder(
-              padding: const EdgeInsets.all(12),
-              itemCount: _companies.length,
-              itemBuilder: (_, i) {
-                final c = _companies[i];
-                return Card(
-                  child: ListTile(
-                    title: Text(c['company_name'] ?? ''),
-                    subtitle: Text(
-                        'الضريبي: ${c['tax_id']} | الحالة: ${c['status']}'),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.check_circle,
-                              color: Colors.green),
-                          onPressed: () async {
-                            await supabase
-                                .from('companies')
-                                .update({'status': 'approved'}).eq(
-                                    'id', c['id']);
-                            _loadAdminData();
-                          },
+            _companies.isEmpty
+                ? const Center(child: Text('لا توجد طلبات شركات حالياً'))
+                : ListView.builder(
+                    padding: const EdgeInsets.all(12),
+                    itemCount: _companies.length,
+                    itemBuilder: (_, i) {
+                      final c = _companies[i];
+                      final st = c['status'] ?? 'pending';
+                      return Card(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        child: Padding(
+                          padding: const EdgeInsets.all(14),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(c['company_name'] ?? '',
+                                  style: const TextStyle(
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.bold)),
+                              Text('العنوان: ${c['company_address']}'),
+                              Text('الرقم الضريبي: ${c['tax_id']}'),
+                              Text('المفوض: ${c['delegate_name']}'),
+                              Text('الموبايل: ${c['phone']}'),
+                              const SizedBox(height: 8),
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Chip(
+                                    label: Text(st == 'approved'
+                                        ? 'معتمد ✅'
+                                        : st == 'rejected'
+                                            ? 'مرفوض ❌'
+                                            : 'قيد المراجعة ⏳'),
+                                  ),
+                                  Row(
+                                    children: [
+                                      ElevatedButton(
+                                        style: ElevatedButton.styleFrom(
+                                            backgroundColor: Colors.green,
+                                            foregroundColor: Colors.white),
+                                        onPressed: () async {
+                                          await supabase
+                                              .from('companies')
+                                              .update({'status': 'approved'}).eq(
+                                                  'id', c['id']);
+                                          _loadAdminData();
+                                        },
+                                        child: const Text('اعتماد'),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      OutlinedButton(
+                                        onPressed: () async {
+                                          await supabase
+                                              .from('companies')
+                                              .update({'status': 'rejected'}).eq(
+                                                  'id', c['id']);
+                                          _loadAdminData();
+                                        },
+                                        child: const Text('رفض'),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
                         ),
-                        IconButton(
-                          icon: const Icon(Icons.cancel, color: Colors.red),
-                          onPressed: () async {
-                            await supabase
-                                .from('companies')
-                                .update({'status': 'rejected'}).eq(
-                                    'id', c['id']);
-                            _loadAdminData();
-                          },
+                      );
+                    },
+                  ),
+            _reports.isEmpty
+                ? const Center(child: Text('لا توجد بلاغات حالياً'))
+                : ListView.builder(
+                    padding: const EdgeInsets.all(12),
+                    itemCount: _reports.length,
+                    itemBuilder: (_, i) {
+                      final r = _reports[i];
+                      return Card(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        child: ListTile(
+                          leading: const Icon(Icons.report, color: Colors.red),
+                          title: Text('بلاغ ضد: ${r['reported_phone']}',
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.bold)),
+                          subtitle: Text(
+                              'السبب: ${r['reason']}\nالمُبلّغ: ${r['reporter_phone']}'),
+                          trailing: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.red,
+                                foregroundColor: Colors.white),
+                            onPressed: () async {
+                              await supabase.from('user_relations').insert({
+                                'user_phone': adminPhoneNumber,
+                                'target_phone': r['reported_phone'],
+                                'relation_type': 'block',
+                              });
+                              await supabase
+                                  .from('reports')
+                                  .delete()
+                                  .eq('id', r['id']);
+                              _loadAdminData();
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                      content: Text(
+                                          'تم حظر الحساب المخالف وإغلاق البلاغ ✅')),
+                                );
+                              }
+                            },
+                            child: const Text('حظر الحساب'),
+                          ),
                         ),
-                      ],
-                    ),
+                      );
+                    },
                   ),
-                );
-              },
-            ),
-            ListView.builder(
-              padding: const EdgeInsets.all(12),
-              itemCount: _reports.length,
-              itemBuilder: (_, i) {
-                final r = _reports[i];
-                return Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.report, color: Colors.red),
-                    title: Text('بلاغ ضد: ${r['reported_phone']}'),
-                    subtitle: Text(
-                        'السبب: ${r['reason']}\nالمُبلّغ: ${r['reporter_phone']}'),
-                  ),
-                );
-              },
-            ),
-            ListView.builder(
-              padding: const EdgeInsets.all(12),
-              itemCount: _orders.length,
-              itemBuilder: (_, i) {
-                final o = _orders[i];
-                return Card(
-                  child: ListTile(
-                    leading:
-                        const Icon(Icons.receipt, color: Color(0xFF006A4E)),
-                    title: Text(o['note'] ?? ''),
-                    subtitle: Text(
-                        'العميل: ${o['sender_phone']} | مرجع: #${o['ref_code']}'),
-                    trailing: Text('${o['amount']} ج.م',
-                        style: const TextStyle(fontWeight: FontWeight.bold)),
-                  ),
-                );
-              },
-            ),
           ],
         ),
       ),
@@ -2389,7 +2423,7 @@ class _AdminMasterScreenState extends State {
 }
 
 // ============================================================================
-// 6. SERVICES TAB (BOOKING.COM STYLE HOTELS + REAL RESTAURANTS + BILLS/GAMES)
+// 6. IN-APP DIRECT SERVICES (ROYAL EMERALD/GOLD HOTELS + IN-APP RESTAURANTS)
 // ============================================================================
 class ServicesTab extends StatelessWidget {
   final String currentUserPhone;
@@ -2430,7 +2464,7 @@ class ServicesTab extends StatelessWidget {
       await supabase.from('transactions').insert({
         'ref_code': ref,
         'sender_phone': currentUserPhone,
-        'receiver_phone': 'EG_MASR_SERVICE',
+        'receiver_phone': 'EG_MASR_DIRECT',
         'amount': amount,
         'tx_type': 'service',
         'note': '$serviceName ($details)',
@@ -2447,7 +2481,7 @@ class ServicesTab extends StatelessWidget {
               children: [
                 Icon(Icons.check_circle, color: Color(0xFFD4AF37)),
                 SizedBox(width: 8),
-                Text('إيصال تنفيذ رسمي - EG MASR',
+                Text('تأكيد تنفيذ مباشر - EG MASR',
                     style: TextStyle(color: Color(0xFFD4AF37), fontSize: 16)),
               ],
             ),
@@ -2473,11 +2507,11 @@ class ServicesTab extends StatelessWidget {
     }
   }
 
-  void _openBookingStyleHotelScreen(BuildContext context) {
+  void _openRoyalHotelEngine(BuildContext context) {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => BookingHotelsScreen(
+        builder: (_) => RoyalHotelsBookingScreen(
           onBookHotel: (hotelName, details, totalPrice) =>
               _chargeUserWalletAndLog(
                   context, totalPrice, 'حجز فندق: $hotelName', details),
@@ -2497,7 +2531,7 @@ class ServicesTab extends StatelessWidget {
       MaterialPageRoute(
         builder: (ctx) => StatefulBuilder(
           builder: (ctx, setSt) => Scaffold(
-            appBar: AppBar(title: Text('$title - EG MASR')),
+            appBar: AppBar(title: Text('$title - مباشر')),
             body: Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
@@ -2529,7 +2563,7 @@ class ServicesTab extends StatelessWidget {
                               (65 + Random().nextInt(280)).toDouble();
                         });
                       },
-                      child: const Text('استعلام عن الفاتورة / قيمة الشحن'),
+                      child: const Text('استعلام فوري عن القيمة'),
                     ),
                   ),
                   if (queried && fetchedBillAmount != null) ...[
@@ -2543,7 +2577,7 @@ class ServicesTab extends StatelessWidget {
                           children: [
                             Text('رقم الحساب: ${accCtrl.text}'),
                             Text(
-                                'المبلغ المستحق: ${fetchedBillAmount!.toStringAsFixed(2)} ج.م',
+                                'المبلغ المطلوب: ${fetchedBillAmount!.toStringAsFixed(2)} ج.م',
                                 style: const TextStyle(
                                     fontSize: 18,
                                     fontWeight: FontWeight.bold,
@@ -2565,7 +2599,7 @@ class ServicesTab extends StatelessWidget {
                                   );
                                   if (ok && ctx.mounted) Navigator.pop(ctx);
                                 },
-                                child: const Text('سداد وخصم من المحفظة الآن'),
+                                child: const Text('سداد مباشر من المحفظة'),
                               ),
                             ),
                           ],
@@ -2603,7 +2637,9 @@ class ServicesTab extends StatelessWidget {
         builder: (ctx) => StatefulBuilder(
           builder: (ctx, setSt) => Scaffold(
             appBar: AppBar(
-                title: Text(isPubg ? 'شحن شدات ببجي PUBG' : 'شحن جواهر فري فاير')),
+                title: Text(isPubg
+                    ? 'شحن شدات ببجي PUBG المباشر'
+                    : 'شحن جواهر فري فاير المباشر')),
             body: Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
@@ -2650,7 +2686,7 @@ class ServicesTab extends StatelessWidget {
                         );
                         if (ok && ctx.mounted) Navigator.pop(ctx);
                       },
-                      child: const Text('تأكيد الشحن الفوري'),
+                      child: const Text('تأكيد الشحن الفوري المباشر'),
                     ),
                   ),
                 ],
@@ -2682,7 +2718,7 @@ class ServicesTab extends StatelessWidget {
       MaterialPageRoute(
         builder: (ctx) => StatefulBuilder(
           builder: (ctx, setSt) => Scaffold(
-            appBar: AppBar(title: const Text('حجز قطارات مصر (تذكرتي)')),
+            appBar: AppBar(title: const Text('حجز قطارات مصر المباشر')),
             body: Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
@@ -2726,7 +2762,7 @@ class ServicesTab extends StatelessWidget {
                         );
                         if (ok && ctx.mounted) Navigator.pop(ctx);
                       },
-                      child: Text('حجز التذكرة الآن ($ticketPrice ج.م)'),
+                      child: Text('حجز وإصدار التذكرة فوراً ($ticketPrice ج.م)'),
                     ),
                   ),
                 ],
@@ -2747,7 +2783,9 @@ class ServicesTab extends StatelessWidget {
         'rating': '4.9',
         'address': '151 شارع عبيد، روض الفرج، شبرا، القاهرة',
         'hours': '11:00 صباحاً - 3:00 صباحاً',
-        'website': 'https://www.facebook.com/SobhyKaberOfficial',
+        'desc':
+            'أشهر مطعم مشويات وطواجن في مصر، يشتهر بالملوخية المصرية بالثوم والطواجن الفلاحي والمشويات على الفحم بأجود أنواع اللحوم البلدية.',
+        'menu': '• صينية مشويات مشكلة: 650 ج.م\n• طاجن عكاوي بالبصل: 240 ج.م\n• ملوخية صبحي كابر: 75 ج.م',
         'image':
             'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=800',
       },
@@ -2757,17 +2795,21 @@ class ServicesTab extends StatelessWidget {
         'rating': '4.8',
         'address': 'التجمع الخامس / الشيخ زايد / مدينة نصر',
         'hours': '12:00 ظهراً - 2:00 صباحاً',
-        'website': 'https://qasrelkababgi.com',
+        'desc':
+            'تجربة ضيافة ملكية فاخرة وقاعات عائلية وكبار الزوار (VIP) مع تشكيلة واسعة من الكباب والكفتة والريش الضاني والمقبلات الشرقية.',
+        'menu': '• كيلو كباب وكفتة ملكي: 820 ج.م\n• ريش ضاني مشوية: 480 ج.م\n• حمام محشي فريك: 195 ج.م',
         'image':
             'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800',
       },
       {
         'name': 'مطعم أبو شقرة (Abou Shakra)',
-        'cat': 'أشهر مطاعم المشويات في مصر منذ 1947',
+        'cat': 'أعرق مطاعم المشويات في مصر منذ 1947',
         'rating': '4.7',
         'address': '69 شارع القصر العيني، جاردن سيتي، القاهرة',
         'hours': '10:00 صباحاً - 2:00 صباحاً',
-        'website': 'https://aboushakragroup.com',
+        'desc':
+            'تاريخ عريق في تقديم أشهى الأطباق والمشويات المصرية الأصيلة في قلب القاهرة بإطلالة مميزة وخدمة راقية.',
+        'menu': '• وجبة أبو شقرة الخاصة: 390 ج.م\n• طاجن بامية باللحم الضاني: 220 ج.م\n• أم علي بالمكسرات: 85 ج.م',
         'image':
             'https://images.unsplash.com/photo-1544025162-d76694265947?w=800',
       },
@@ -2779,22 +2821,27 @@ class ServicesTab extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         children: [
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
-              color: const Color(0xFF003580),
-              borderRadius: BorderRadius.circular(18),
+              gradient: const LinearGradient(
+                colors: [Color(0xFF004D38), Color(0xFF006A4E)],
+                begin: Alignment.topRight,
+                end: Alignment.bottomLeft,
+              ),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: const Color(0xFFD4AF37), width: 1.5),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Row(
                   children: [
-                    Icon(Icons.hotel, color: Color(0xFFFEBB02), size: 28),
+                    Icon(Icons.villa, color: Color(0xFFD4AF37), size: 30),
                     SizedBox(width: 8),
                     Text(
-                      'حجز الفنادق المباشر (EG MASR Booking)',
+                      'إقامات وفنادق EG MASR الفاخرة',
                       style: TextStyle(
-                          color: Colors.white,
+                          color: Color(0xFFD4AF37),
                           fontSize: 16,
                           fontWeight: FontWeight.bold),
                     ),
@@ -2802,7 +2849,7 @@ class ServicesTab extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  'اختر المدينة، تاريخ الوصول والمغادرة بالساعة، عدد الأفراد والأعمار واحجز غرفتك مباشرة من محفظتك.',
+                  'حجز مباشر سريع: حدد الوجهة، تاريخ وساعة الوصول والمغادرة، عدد النزلاء وأعمارهم واحجز فندقك فوراً.',
                   style: TextStyle(color: Colors.white70, fontSize: 12),
                 ),
                 const SizedBox(height: 12),
@@ -2810,12 +2857,12 @@ class ServicesTab extends StatelessWidget {
                   width: double.infinity,
                   child: ElevatedButton.icon(
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFFEBB02),
+                      backgroundColor: const Color(0xFFD4AF37),
                       foregroundColor: Colors.black,
                     ),
-                    onPressed: () => _openBookingStyleHotelScreen(context),
+                    onPressed: () => _openRoyalHotelEngine(context),
                     icon: const Icon(Icons.search),
-                    label: const Text('بحث وحجز الفنادق الآن',
+                    label: const Text('استكشاف وحجز الفنادق مباشرة',
                         style: TextStyle(fontWeight: FontWeight.bold)),
                   ),
                 ),
@@ -2823,7 +2870,7 @@ class ServicesTab extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 18),
-          const Text('خدمات الدفع والشحن الفوري',
+          const Text('خدمات الدفع والشحن المباشر',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
           const SizedBox(height: 10),
           GridView.count(
@@ -2834,22 +2881,31 @@ class ServicesTab extends StatelessWidget {
             crossAxisSpacing: 10,
             mainAxisSpacing: 10,
             children: [
-              _serviceTile(Icons.electric_bolt, 'فواتير الكهرباء',
-                  () => _openInAppFawryBillScreen(context, 'فاتورة الكهرباء', 'رقم السداد الإلكتروني')),
-              _serviceTile(Icons.phone_android, 'شحن رصيد / باقات',
-                  () => _openInAppFawryBillScreen(context, 'شحن رصيد موبايل', 'رقم الموبايل')),
+              _serviceTile(
+                  Icons.electric_bolt,
+                  'فواتير الكهرباء',
+                  () => _openInAppFawryBillScreen(
+                      context, 'فاتورة الكهرباء', 'رقم السداد الإلكتروني')),
+              _serviceTile(
+                  Icons.phone_android,
+                  'شحن رصيد / باقات',
+                  () => _openInAppFawryBillScreen(
+                      context, 'شحن رصيد موبايل', 'رقم الموبايل')),
               _serviceTile(Icons.sports_esports, 'شدات ببجي PUBG',
                   () => _openInAppGameTopupScreen(context, true)),
               _serviceTile(Icons.videogame_asset, 'جواهر فري فاير',
                   () => _openInAppGameTopupScreen(context, false)),
               _serviceTile(Icons.train, 'قطارات مصر',
                   () => _openInAppTrainBookingScreen(context)),
-              _serviceTile(Icons.flight_takeoff, 'حجز طيران',
-                  () => launchUrl(Uri.parse('https://www.egyptair.com'), mode: LaunchMode.externalApplication)),
+              _serviceTile(
+                  Icons.flight_takeoff,
+                  'حجز طيران مباشر',
+                  () => _openInAppFawryBillScreen(
+                      context, 'حجز تذكرة طيران', 'رقم جواز السفر / الرقم القومي')),
             ],
           ),
           const SizedBox(height: 22),
-          const Text('أشهر المطاعم الحقيقية في مصر (معاينة وحجز)',
+          const Text('أشهر المطاعم الحقيقية في مصر (معاينة وحجز مباشر)',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
           const SizedBox(height: 10),
           ...realRestaurants.map((place) => Card(
@@ -2861,7 +2917,7 @@ class ServicesTab extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Image.network(place['image']!,
-                        height: 140, width: double.infinity, fit: BoxFit.cover),
+                        height: 145, width: double.infinity, fit: BoxFit.cover),
                     Padding(
                       padding: const EdgeInsets.all(14),
                       child: Column(
@@ -2880,11 +2936,22 @@ class ServicesTab extends StatelessWidget {
                             children: [
                               Expanded(
                                 child: OutlinedButton.icon(
-                                  onPressed: () => launchUrl(
-                                      Uri.parse(place['website']!),
-                                      mode: LaunchMode.externalApplication),
-                                  icon: const Icon(Icons.public, size: 18),
-                                  label: const Text('معاينة الصفحة الرسمية'),
+                                  onPressed: () {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) =>
+                                            InAppRestaurantPreviewScreen(
+                                          place: place,
+                                          onBookNow: () =>
+                                              _openRestaurantBookingForm(
+                                                  context, place['name']!),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  icon: const Icon(Icons.visibility, size: 18),
+                                  label: const Text('معاينة المطعم'),
                                 ),
                               ),
                               const SizedBox(width: 8),
@@ -2942,7 +3009,7 @@ class ServicesTab extends StatelessWidget {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSt) => AlertDialog(
-          title: Text('حجز في $restName'),
+          title: Text('حجز مباشر في $restName'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -3006,18 +3073,103 @@ class ServicesTab extends StatelessWidget {
   }
 }
 
-// ============================================================================
-// 7. BOOKING.COM REPLICA HOTEL SEARCH & DIRECT BOOKING ENGINE
-// ============================================================================
-class BookingHotelsScreen extends StatefulWidget {
-  final Future Function(String, String, double) onBookHotel;
-  const BookingHotelsScreen({super.key, required this.onBookHotel});
+class InAppRestaurantPreviewScreen extends StatelessWidget {
+  final Map place;
+  final VoidCallback onBookNow;
+  const InAppRestaurantPreviewScreen({
+    super.key,
+    required this.place,
+    required this.onBookNow,
+  });
 
   @override
-  State createState() => _BookingHotelsScreenState();
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(place['name'] ?? '')),
+      body: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Image.network(place['image'] ?? '',
+                height: 220, width: double.infinity, fit: BoxFit.cover),
+            Padding(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Text(place['name'] ?? '',
+                            style: const TextStyle(
+                                fontSize: 20, fontWeight: FontWeight.bold)),
+                      ),
+                      Chip(
+                        backgroundColor: const Color(0xFFD4AF37),
+                        label: Text('⭐ ${place['rating']}',
+                            style:
+                                const TextStyle(fontWeight: FontWeight.bold)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text('📍 ${place['address']}'),
+                  Text('🕒 مواعيد العمل: ${place['hours']}',
+                      style: const TextStyle(color: Colors.grey)),
+                  const Divider(height: 24),
+                  const Text('نبذة عن المطعم:',
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  Text(place['desc'] ?? '', style: const TextStyle(height: 1.5)),
+                  const Divider(height: 24),
+                  const Text('أشهر الأصناف والأسعار:',
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  Text(place['menu'] ?? '', style: const TextStyle(height: 1.6)),
+                  const SizedBox(height: 24),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF006A4E),
+                        foregroundColor: Colors.white,
+                      ),
+                      onPressed: () {
+                        Navigator.pop(context);
+                        onBookNow();
+                      },
+                      icon: const Icon(Icons.event_seat),
+                      label: const Text('احجز طاولتك الآن في هذا المطعم',
+                          style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
-class _BookingHotelsScreenState extends State {
+// ============================================================================
+// 7. ROYAL EMERALD & GOLD HOTEL BOOKING ENGINE (DISTINCT DESIGN & FAST)
+// ============================================================================
+class RoyalHotelsBookingScreen extends StatefulWidget {
+  final Future Function(String, String, double) onBookHotel;
+  const RoyalHotelsBookingScreen({super.key, required this.onBookHotel});
+
+  @override
+  State createState() => _RoyalHotelsBookingScreenState();
+}
+
+class _RoyalHotelsBookingScreenState extends State {
   String _city = 'القاهرة';
   DateTime _checkInDate = DateTime.now().add(const Duration(days: 1));
   TimeOfDay _checkInTime = const TimeOfDay(hour: 14, minute: 0);
@@ -3027,7 +3179,7 @@ class _BookingHotelsScreenState extends State {
   int _children = 0;
   final _agesCtrl = TextEditingController(text: '30, 28');
 
-  BookingHotelsScreen get w => widget as BookingHotelsScreen;
+  RoyalHotelsBookingScreen get w => widget as RoyalHotelsBookingScreen;
 
   @override
   Widget build(BuildContext context) {
@@ -3039,18 +3191,16 @@ class _BookingHotelsScreenState extends State {
       {
         'name': 'فندق فيرمونت نايل سيتي (Fairmont Nile City)',
         'city': 'القاهرة',
-        'rating': '9.2 استثنائي',
-        'stars': 5,
+        'rating': '9.4 ملكي',
         'pricePerNight': 4200.0,
-        'room': 'غرفة ديلوكس مطلة على النيل مباشرة + إفطار',
+        'room': 'غرفة ديلوكس مطلة على النيل مباشرة + إفطار فاخر',
         'image':
             'https://images.unsplash.com/photo-1566073771259-6a8506099945?w=800',
       },
       {
         'name': 'فندق فورسيزونز سان ستيفانو (Four Seasons)',
         'city': 'الإسكندرية',
-        'rating': '9.4 ممتاز للغاية',
-        'stars': 5,
+        'rating': '9.6 استثنائي',
         'pricePerNight': 5100.0,
         'room': 'جناح سوبيريور مطل على البحر المتوسط',
         'image':
@@ -3059,8 +3209,7 @@ class _BookingHotelsScreenState extends State {
       {
         'name': 'منتجع ريكسوس بريميوم سيجيت (Rixos Sharm)',
         'city': 'شرم الشيخ',
-        'rating': '9.5 رائع',
-        'stars': 5,
+        'rating': '9.7 فاخر',
         'pricePerNight': 4800.0,
         'room': 'غرفة فاخرة شاملة كلياً (Ultra All Inclusive)',
         'image':
@@ -3070,29 +3219,38 @@ class _BookingHotelsScreenState extends State {
 
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: const Color(0xFF003580),
-        title: const Text('EG MASR Booking - الفنادق'),
+        backgroundColor: const Color(0xFF004D38),
+        title: const Text('إقامات وفنادق EG MASR'),
       ),
       body: ListView(
         padding: const EdgeInsets.all(14),
         children: [
           Container(
-            padding: const EdgeInsets.all(14),
+            padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: const Color(0xFF003580),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: const Color(0xFFFEBB02), width: 3),
+              gradient: const LinearGradient(
+                colors: [Color(0xFF004D38), Color(0xFF006A4E)],
+              ),
+              borderRadius: BorderRadius.circular(22),
+              boxShadow: const [
+                BoxShadow(
+                    color: Colors.black12, blurRadius: 10, offset: Offset(0, 4))
+              ],
             ),
             child: Column(
               children: [
                 DropdownButtonFormField(
                   value: _city,
                   dropdownColor: Colors.white,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     filled: true,
                     fillColor: Colors.white,
-                    prefixIcon: Icon(Icons.location_city),
+                    prefixIcon: const Icon(Icons.location_on,
+                        color: Color(0xFF006A4E)),
                     labelText: 'الوجهة / المدينة',
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: BorderSide.none),
                   ),
                   items: ['القاهرة', 'الإسكندرية', 'شرم الشيخ', 'الغردقة', 'أسوان']
                       .map((c) => DropdownMenuItem(value: c, child: Text(c)))
@@ -3101,7 +3259,7 @@ class _BookingHotelsScreenState extends State {
                     if (v != null) setState(() => _city = v.toString());
                   },
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 10),
                 Row(
                   children: [
                     Expanded(
@@ -3124,16 +3282,19 @@ class _BookingHotelsScreenState extends State {
                           }
                         },
                         child: Container(
-                          padding: const EdgeInsets.all(10),
-                          color: Colors.white,
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(14),
+                          ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text('تاريخ وساعة الوصول',
+                              const Text('الوصول (اليوم والساعة)',
                                   style: TextStyle(
                                       fontSize: 11, color: Colors.grey)),
                               Text(
-                                  '${_checkInDate.day}/${_checkInDate.month}/${_checkInDate.year} - ${_checkInTime.format(context)}',
+                                  '${_checkInDate.day}/${_checkInDate.month} • ${_checkInTime.format(context)}',
                                   style: const TextStyle(
                                       fontWeight: FontWeight.bold,
                                       fontSize: 12)),
@@ -3163,16 +3324,19 @@ class _BookingHotelsScreenState extends State {
                           }
                         },
                         child: Container(
-                          padding: const EdgeInsets.all(10),
-                          color: Colors.white,
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(14),
+                          ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text('تاريخ وساعة المغادرة',
+                              const Text('المغادرة (اليوم والساعة)',
                                   style: TextStyle(
                                       fontSize: 11, color: Colors.grey)),
                               Text(
-                                  '${_checkOutDate.day}/${_checkOutDate.month}/${_checkOutDate.year} - ${_checkOutTime.format(context)}',
+                                  '${_checkOutDate.day}/${_checkOutDate.month} • ${_checkOutTime.format(context)}',
                                   style: const TextStyle(
                                       fontWeight: FontWeight.bold,
                                       fontSize: 12)),
@@ -3183,10 +3347,13 @@ class _BookingHotelsScreenState extends State {
                     ),
                   ],
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 10),
                 Container(
-                  padding: const EdgeInsets.all(10),
-                  color: Colors.white,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
                   child: Column(
                     children: [
                       Row(
@@ -3198,17 +3365,20 @@ class _BookingHotelsScreenState extends State {
                           Row(
                             children: [
                               IconButton(
-                                icon: const Icon(Icons.remove_circle_outline),
+                                icon: const Icon(Icons.remove_circle_outline,
+                                    color: Color(0xFF006A4E)),
                                 onPressed: () {
                                   if (_adults > 1) setState(() => _adults--);
                                 },
                               ),
                               IconButton(
-                                icon: const Icon(Icons.add_circle_outline),
+                                icon: const Icon(Icons.add_circle_outline,
+                                    color: Color(0xFF006A4E)),
                                 onPressed: () => setState(() => _adults++),
                               ),
                               IconButton(
-                                icon: const Icon(Icons.child_care),
+                                icon: const Icon(Icons.child_care,
+                                    color: Color(0xFFD4AF37)),
                                 onPressed: () => setState(() => _children++),
                               ),
                             ],
@@ -3229,7 +3399,7 @@ class _BookingHotelsScreenState extends State {
             ),
           ),
           const SizedBox(height: 16),
-          Text('الفنادق المتاحة ($nights ليالي):',
+          Text('الفنادق المتاحة للإقامة ($nights ليالي):',
               style:
                   const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
           const SizedBox(height: 10),
@@ -3239,7 +3409,7 @@ class _BookingHotelsScreenState extends State {
               margin: const EdgeInsets.only(bottom: 14),
               clipBehavior: Clip.antiAlias,
               shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16)),
+                  borderRadius: BorderRadius.circular(18)),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -3258,18 +3428,20 @@ class _BookingHotelsScreenState extends State {
                                   style: const TextStyle(
                                       fontSize: 16,
                                       fontWeight: FontWeight.bold,
-                                      color: Color(0xFF003580))),
+                                      color: Color(0xFF004D38))),
                             ),
                             Container(
                               padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 4),
+                                  horizontal: 10, vertical: 4),
                               decoration: BoxDecoration(
-                                color: const Color(0xFF003580),
-                                borderRadius: BorderRadius.circular(8),
+                                color: const Color(0xFFD4AF37),
+                                borderRadius: BorderRadius.circular(10),
                               ),
                               child: Text(h['rating'] as String,
                                   style: const TextStyle(
-                                      color: Colors.white, fontSize: 11)),
+                                      color: Colors.black,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 11)),
                             ),
                           ],
                         ),
@@ -3295,7 +3467,7 @@ class _BookingHotelsScreenState extends State {
                             ),
                             ElevatedButton(
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF003580),
+                                backgroundColor: const Color(0xFF006A4E),
                                 foregroundColor: Colors.white,
                               ),
                               onPressed: () async {
@@ -3305,7 +3477,7 @@ class _BookingHotelsScreenState extends State {
                                     h['name'] as String, details, total);
                                 if (ok && mounted) Navigator.pop(context);
                               },
-                              child: const Text('احجز الغرفة الآن'),
+                              child: const Text('تأكيد الحجز المباشر'),
                             ),
                           ],
                         ),
