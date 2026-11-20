@@ -22,16 +22,8 @@ jobs:
         run: |
           flutter create --platforms=android .
           flutter pub get
+          sed -i 's/id("org.jetbrains.kotlin.android") version ".*"/id("org.jetbrains.kotlin.android") version "2.1.0"/g' android/settings.gradle.kts || true
           sed -i 's/minSdk = .*/minSdk = 23/g' android/app/build.gradle.kts || true
-          cat << 'EOF' >> android/build.gradle.kts
-          subprojects {
-              tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
-                  compilerOptions {
-                      jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
-                  }
-              }
-          }
-          EOF
           sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.CAMERA"/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <uses-permission android:name="android.permission.READ_CONTACTS"/>\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>' android/app/src/main/AndroidManifest.xml
       - name: Build APK
         run: flutter build apk --release
