@@ -18,9 +18,10 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.29.0'
           channel: 'stable'
 
-      - name: Prepare Android Project & Disable Lint Abort
+      - name: Prepare Android Project
         run: |
           flutter create --platforms=android .
           python3 -c '
@@ -28,7 +29,7 @@ jobs:
           for path in glob.glob("android/app/build.gradle*"):
               with open(path, "r") as f:
                   s = f.read()
-              s = s.replace("flutter.compileSdkVersion", "36")
+              s = s.replace("flutter.compileSdkVersion", "35")
               s = s.replace("flutter.minSdkVersion", "24")
               s = s.replace("flutter.targetSdkVersion", "35")
               if "buildTypes" in s:
