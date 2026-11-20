@@ -22,14 +22,48 @@ jobs:
         run: |
           flutter create --platforms=android .
           flutter pub get
-          sed -i 's/minSdk = .*/minSdk = 23/g' android/app/build.gradle.kts || true
-          sed -i 's/minSdkVersion .*/minSdkVersion 23/g' android/app/build.gradle || true
-          sed -i 's/JavaVersion.VERSION_1_8/JavaVersion.VERSION_17/g' android/app/build.gradle.kts || true
-          sed -i 's/JavaVersion.VERSION_11/JavaVersion.VERSION_17/g' android/app/build.gradle.kts || true
-          sed -i 's/jvmTarget = "1.8"/jvmTarget = "17"/g' android/app/build.gradle.kts || true
-          sed -i 's/jvmTarget = "11"/jvmTarget = "17"/g' android/app/build.gradle.kts || true
-          sed -i 's/jvmTarget = JavaVersion.VERSION_11.toString()/jvmTarget = "17"/g' android/app/build.gradle.kts || true
-          sed -i 's/jvmTarget = JavaVersion.VERSION_1_8.toString()/jvmTarget = "17"/g' android/app/build.gradle.kts || true
+          cat << 'EOF' > android/app/build.gradle.kts
+          plugins {
+              id("com.android.application")
+              id("kotlin-android")
+              id("dev.flutter.flutter-gradle-plugin")
+          }
+
+          android {
+              namespace = "com.example.eg_masr_app"
+              compileSdk = flutter.compileSdkVersion
+              ndkVersion = flutter.ndkVersion
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+
+              kotlin {
+                  compilerOptions {
+                      jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+                  }
+              }
+
+              defaultConfig {
+                  applicationId = "com.egmasr.superapp"
+                  minSdk = 23
+                  targetSdk = flutter.targetSdkVersion
+                  versionCode = flutter.versionCode
+                  versionName = flutter.versionName
+              }
+
+              buildTypes {
+                  release {
+                      signingConfig = signingConfigs.getByName("debug")
+                  }
+              }
+          }
+
+          flutter {
+              source = "../.."
+          }
+          EOF
           sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.CAMERA"/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <uses-permission android:name="android.permission.READ_CONTACTS"/>\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>' android/app/src/main/AndroidManifest.xml
       - name: Build APK
         run: flutter build apk --release
