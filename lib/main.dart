@@ -36,7 +36,7 @@ class EgMasrSuperApp extends StatelessWidget {
           seedColor: const Color(0xFF006A4E),
           primary: const Color(0xFF006A4E),
           secondary: const Color(0xFFD4AF37),
-          surface: const Color(0xFFF6F8F7),
+          surface: const Color(0xFFF4F6F5),
         ),
         appBarTheme: const AppBarTheme(
           backgroundColor: Color(0xFF006A4E),
@@ -102,7 +102,7 @@ class _AuthGateState extends State {
 }
 
 // ============================================================================
-// 1. LOGIN SCREEN (DYNAMIC RANDOM OTP + INDIVIDUAL & CORPORATE REGISTRATION)
+// 1. LOGIN SCREEN (DYNAMIC RANDOM OTP + INDIVIDUAL & CORPORATE)
 // ============================================================================
 class LoginScreen extends StatefulWidget {
   final Function(String, String) onLoginSuccess;
@@ -137,11 +137,6 @@ class _LoginScreenState extends State {
     return p;
   }
 
-  String _generateUniqueOtp() {
-    final rng = Random.secure();
-    return (100000 + rng.nextInt(900000)).toString();
-  }
-
   Future _sendOtp() async {
     final phone = _normalizePhone(_phoneCtrl.text.trim());
     if (phone.length < 11) {
@@ -163,7 +158,7 @@ class _LoginScreenState extends State {
       }
     }
 
-    final newCode = _generateUniqueOtp();
+    final newCode = (100000 + Random.secure().nextInt(900000)).toString();
     setState(() {
       _dynamicOtp = newCode;
       _otpSent = true;
@@ -178,12 +173,12 @@ class _LoginScreenState extends State {
             children: [
               Icon(Icons.sms, color: Color(0xFF006A4E)),
               SizedBox(width: 8),
-              Text('كود التحقق المتغير (OTP)'),
+              Text('كود التحقق (OTP)'),
             ],
           ),
           content: Text(
-            'كود الدخول الخاص برقم $phone لهذه الجلسة هو:\n\n$newCode\n\n(يتغير الكود تلقائياً في كل محاولة تسجيل)',
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            'كود الدخول المتغير الخاص برقم $phone هو:\n\n$newCode',
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
           actions: [
             ElevatedButton(
@@ -446,13 +441,6 @@ class _LoginScreenState extends State {
                               borderRadius: BorderRadius.circular(14)),
                         ),
                       ),
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: TextButton(
-                          onPressed: _sendOtp,
-                          child: const Text('إرسال كود جديد'),
-                        ),
-                      ),
                     ],
                     const SizedBox(height: 14),
                     SizedBox(
@@ -472,7 +460,7 @@ class _LoginScreenState extends State {
                             : Text(
                                 _otpSent
                                     ? 'تأكيد ودخول للتطبيق'
-                                    : 'إرسال كود التفعيل المتغير',
+                                    : 'إرسال كود التفعيل',
                                 style: const TextStyle(
                                     fontSize: 16, fontWeight: FontWeight.bold),
                               ),
@@ -490,7 +478,7 @@ class _LoginScreenState extends State {
 }
 
 // ============================================================================
-// 2. MAIN HOME SHELL
+// 2. MAIN HOME SHELL (4 TABS: CHATS/GROUPS, FEED, WALLET, SERVICES/BOOKING)
 // ============================================================================
 class MainHomeShell extends StatefulWidget {
   final String userPhone;
@@ -515,7 +503,11 @@ class _MainHomeShellState extends State {
   void initState() {
     super.initState();
     _pages = [
-      ChatsTab(currentUserPhone: w.userPhone),
+      ChatsAndGroupsTab(currentUserPhone: w.userPhone),
+      SocialFeedTab(
+        currentUserPhone: w.userPhone,
+        isAdmin: w.userPhone == adminPhoneNumber,
+      ),
       WalletTab(
         currentUserPhone: w.userPhone,
         isAdmin: w.userPhone == adminPhoneNumber,
@@ -535,24 +527,26 @@ class _MainHomeShellState extends State {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: [
-          const NavigationDestination(
+        destinations: const [
+          NavigationDestination(
             icon: Icon(Icons.chat_bubble_outline),
             selectedIcon: Icon(Icons.chat_bubble),
             label: 'المحادثات',
           ),
-          const NavigationDestination(
-            icon: Icon(Icons.account_balance_wallet_outlined),
-            selectedIcon: Icon(Icons.account_balance_wallet),
-            label: 'المحفظة و QR',
+          NavigationDestination(
+            icon: Icon(Icons.dynamic_feed_outlined),
+            selectedIcon: Icon(Icons.dynamic_feed),
+            label: 'الموجز',
           ),
           NavigationDestination(
-            icon: const Icon(Icons.grid_view_outlined),
-            selectedIcon: const Icon(Icons.grid_view),
-            label: (w.accountType == 'corporate' ||
-                    w.userPhone == adminPhoneNumber)
-                ? 'خدمات الشركات VIP'
-                : 'الخدمات والشحن',
+            icon: Icon(Icons.account_balance_wallet_outlined),
+            selectedIcon: Icon(Icons.account_balance_wallet),
+            label: 'المحفظة',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.grid_view_outlined),
+            selectedIcon: Icon(Icons.grid_view),
+            label: 'الخدمات',
           ),
         ],
       ),
@@ -561,26 +555,29 @@ class _MainHomeShellState extends State {
 }
 
 // ============================================================================
-// 3. CHATS TAB + FULL CONTACTS
+// 3. CHATS (1-TO-1 + UNLIMITED GROUPS + BLOCK + REPORT + FRIENDS)
 // ============================================================================
-class ChatsTab extends StatefulWidget {
+class ChatsAndGroupsTab extends StatefulWidget {
   final String currentUserPhone;
-  const ChatsTab({super.key, required this.currentUserPhone});
+  const ChatsAndGroupsTab({super.key, required this.currentUserPhone});
 
   @override
-  State createState() => _ChatsTabState();
+  State createState() => _ChatsAndGroupsTabState();
 }
 
-class _ChatsTabState extends State {
+class _ChatsAndGroupsTabState extends State {
   List _users = [];
+  List _groups = [];
+  Set _blockedPhones = {};
+  Set _friendPhones = {};
   bool _loading = true;
 
-  ChatsTab get w => widget as ChatsTab;
+  ChatsAndGroupsTab get w => widget as ChatsAndGroupsTab;
 
   @override
   void initState() {
     super.initState();
-    _loadUsers();
+    _loadData();
   }
 
   String _normalizePhone(String input) {
@@ -593,15 +590,37 @@ class _ChatsTabState extends State {
     return p;
   }
 
-  Future _loadUsers() async {
+  Future _loadData() async {
     try {
-      final res = await supabase
+      final profs = await supabase
           .from('profiles')
           .select()
           .neq('phone', w.currentUserPhone);
+      final grps = await supabase
+          .from('groups')
+          .select()
+          .order('created_at', ascending: false);
+      final rels = await supabase
+          .from('user_relations')
+          .select()
+          .eq('user_phone', w.currentUserPhone);
+
+      final blocked = <String>{};
+      final friends = <String>{};
+      for (var r in rels) {
+        if (r['relation_type'] == 'block') {
+          blocked.add(r['target_phone'].toString());
+        } else if (r['relation_type'] == 'friend') {
+          friends.add(r['target_phone'].toString());
+        }
+      }
+
       if (mounted) {
         setState(() {
-          _users = List.from(res);
+          _users = List.from(profs);
+          _groups = List.from(grps);
+          _blockedPhones = blocked;
+          _friendPhones = friends;
           _loading = false;
         });
       }
@@ -610,26 +629,98 @@ class _ChatsTabState extends State {
     }
   }
 
+  void _createUnlimitedGroupDialog() {
+    final nameCtrl = TextEditingController();
+    final selectedPhones = {w.currentUserPhone};
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSt) => AlertDialog(
+          title: const Text('إنشاء جروب مفتوح العدد 👥'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'اسم الجروب',
+                    prefixIcon: Icon(Icons.group),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                const Align(
+                  alignment: Alignment.centerRight,
+                  child: Text('اختر الأعضاء (عدد مفتوح):',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+                SizedBox(
+                  height: 180,
+                  child: ListView.builder(
+                    itemCount: _users.length,
+                    itemBuilder: (_, i) {
+                      final u = _users[i];
+                      final ph = u['phone'].toString();
+                      final checked = selectedPhones.contains(ph);
+                      return CheckboxListTile(
+                        value: checked,
+                        title: Text(u['full_name'] ?? ph),
+                        subtitle: Text(ph),
+                        onChanged: (v) {
+                          setSt(() {
+                            if (v == true) {
+                              selectedPhones.add(ph);
+                            } else {
+                              selectedPhones.remove(ph);
+                            }
+                          });
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('إلغاء')),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF006A4E),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () async {
+                if (nameCtrl.text.trim().isEmpty) return;
+                Navigator.pop(ctx);
+                await supabase.from('groups').insert({
+                  'group_name': nameCtrl.text.trim(),
+                  'created_by': w.currentUserPhone,
+                  'members': selectedPhones.toList(),
+                });
+                _loadData();
+              },
+              child: const Text('إنشاء الجروب'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future _openContactsSheet() async {
     final granted = await FlutterContacts.requestPermission(readonly: true);
-    if (!granted) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('يرجى السماح بالوصول لجهات الاتصال')),
-        );
-      }
-      return;
-    }
-
+    if (!granted) return;
     final contacts = await FlutterContacts.getContacts(withProperties: true);
     final registeredMap = {};
     for (var u in _users) {
       registeredMap[_normalizePhone(u['phone'].toString())] = u;
     }
-
     final matched = [];
     final allOthers = [];
-
     for (final c in contacts) {
       if (c.phones.isEmpty) continue;
       for (final ph in c.phones) {
@@ -642,7 +733,6 @@ class _ChatsTabState extends State {
         }
       }
     }
-
     if (!mounted) return;
     Navigator.push(
       context,
@@ -656,117 +746,136 @@ class _ChatsTabState extends State {
     );
   }
 
-  Future _searchByPhoneDialog() async {
-    final ctrl = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('بدء محادثة برقم الموبايل'),
-        content: TextField(
-          controller: ctrl,
-          keyboardType: TextInputType.phone,
-          decoration: const InputDecoration(
-            hintText: '01xxxxxxxxx',
-            prefixIcon: Icon(Icons.phone),
-          ),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
-          ElevatedButton(
-            onPressed: () {
-              final p = _normalizePhone(ctrl.text.trim());
-              if (p.length >= 11) {
-                Navigator.pop(ctx);
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => ChatRoomScreen(
-                      myPhone: w.currentUserPhone,
-                      peerPhone: p,
-                      peerName: p,
-                    ),
-                  ),
-                );
-              }
-            },
-            child: const Text('محادثة'),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('المحادثات'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.person_search),
-            onPressed: _searchByPhoneDialog,
+    final visibleUsers =
+        _users.where((u) => !_blockedPhones.contains(u['phone'])).toList();
+
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('المحادثات والجروبات'),
+          bottom: const TabBar(
+            indicatorColor: Color(0xFFD4AF37),
+            labelColor: Colors.white,
+            unselectedLabelColor: Colors.white70,
+            tabs: [
+              Tab(text: 'محادثات خاصة (1 إلى 1)'),
+              Tab(text: 'الجروبات (مفتوحة العدد)'),
+            ],
           ),
-          IconButton(
-            icon: const Icon(Icons.contacts),
-            onPressed: _openContactsSheet,
-          ),
-        ],
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _users.isEmpty
-              ? Center(
-                  child: ElevatedButton.icon(
-                    onPressed: _openContactsSheet,
-                    icon: const Icon(Icons.contacts),
-                    label: const Text('عرض كل جهات الاتصال'),
-                  ),
-                )
-              : ListView.separated(
-                  itemCount: _users.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (_, i) {
-                    final u = _users[i];
-                    return ListTile(
-                      leading: const CircleAvatar(
-                        backgroundColor: Color(0xFF006A4E),
-                        child: Icon(Icons.person, color: Colors.white),
-                      ),
-                      title: Text(u['full_name'] ?? u['phone']),
-                      subtitle: Text(u['phone']),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => ChatRoomScreen(
-                              myPhone: w.currentUserPhone,
-                              peerPhone: u['phone'],
-                              peerName: u['full_name'] ?? u['phone'],
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.group_add),
+              tooltip: 'إنشاء جروب',
+              onPressed: _createUnlimitedGroupDialog,
+            ),
+            IconButton(
+              icon: const Icon(Icons.contacts),
+              onPressed: _openContactsSheet,
+            ),
+          ],
+        ),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : TabBarView(
+                children: [
+                  ListView.separated(
+                    itemCount: visibleUsers.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (_, i) {
+                      final u = visibleUsers[i];
+                      final ph = u['phone'].toString();
+                      final isFriend = _friendPhones.contains(ph);
+                      return ListTile(
+                        leading: const CircleAvatar(
+                          backgroundColor: Color(0xFF006A4E),
+                          child: Icon(Icons.person, color: Colors.white),
+                        ),
+                        title: Row(
+                          children: [
+                            Text(u['full_name'] ?? ph),
+                            if (isFriend) ...[
+                              const SizedBox(width: 6),
+                              const Icon(Icons.verified,
+                                  color: Colors.blue, size: 16),
+                            ],
+                          ],
+                        ),
+                        subtitle: Text(ph),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () {
+                          final list = [w.currentUserPhone, ph]..sort();
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => ChatRoomScreen(
+                                myPhone: w.currentUserPhone,
+                                roomId: '${list[0]}_${list[1]}',
+                                peerPhone: ph,
+                                title: u['full_name'] ?? ph,
+                                isGroup: false,
+                                isFriend: isFriend,
+                                onRelationChanged: _loadData,
+                              ),
                             ),
-                          ),
-                        );
-                      },
-                    );
-                  },
-                ),
-      floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: const Color(0xFF006A4E),
-        foregroundColor: Colors.white,
-        onPressed: _openContactsSheet,
-        icon: const Icon(Icons.contacts),
-        label: const Text('جهات الاتصال'),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                  ListView.builder(
+                    itemCount: _groups.length,
+                    itemBuilder: (_, i) {
+                      final g = _groups[i];
+                      final members = List.from(g['members'] ?? []);
+                      return ListTile(
+                        leading: const CircleAvatar(
+                          backgroundColor: Color(0xFFD4AF37),
+                          child: Icon(Icons.groups, color: Colors.black),
+                        ),
+                        title: Text(g['group_name'] ?? ''),
+                        subtitle: Text('عدد الأعضاء: ${members.length} عضو'),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => ChatRoomScreen(
+                                myPhone: w.currentUserPhone,
+                                roomId: 'GROUP_${g['id']}',
+                                peerPhone: g['id'].toString(),
+                                title: g['group_name'] ?? 'جروب',
+                                isGroup: true,
+                                groupId: g['id'].toString(),
+                                groupMembers: members,
+                                onRelationChanged: _loadData,
+                              ),
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ],
+              ),
+        floatingActionButton: FloatingActionButton.extended(
+          backgroundColor: const Color(0xFF006A4E),
+          foregroundColor: Colors.white,
+          onPressed: _createUnlimitedGroupDialog,
+          icon: const Icon(Icons.group_add),
+          label: const Text('جروب جديد'),
+        ),
       ),
     );
   }
 }
 
-class FullContactsScreen extends StatefulWidget {
+class FullContactsScreen extends StatelessWidget {
   final String myPhone;
   final List matched;
   final List allContacts;
-
   const FullContactsScreen({
     super.key,
     required this.myPhone,
@@ -775,97 +884,43 @@ class FullContactsScreen extends StatefulWidget {
   });
 
   @override
-  State createState() => _FullContactsScreenState();
-}
-
-class _FullContactsScreenState extends State {
-  String _query = '';
-  FullContactsScreen get w => widget as FullContactsScreen;
-
-  @override
   Widget build(BuildContext context) {
-    final filteredMatched = w.matched
-        .where((m) =>
-            m['name'].toString().toLowerCase().contains(_query.toLowerCase()) ||
-            m['phone'].toString().contains(_query))
-        .toList();
-
-    final filteredAll = w.allContacts
-        .where((c) =>
-            c['name'].toString().toLowerCase().contains(_query.toLowerCase()) ||
-            c['phone'].toString().contains(_query))
-        .toList();
-
     return Scaffold(
-      appBar: AppBar(
-        title:
-            Text('جهات الاتصال (${w.matched.length + w.allContacts.length})'),
-      ),
-      body: Column(
+      appBar: AppBar(title: const Text('جهات الاتصال')),
+      body: ListView(
         children: [
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: TextField(
-              decoration: InputDecoration(
-                hintText: 'ابحث بالاسم أو رقم الموبايل...',
-                prefixIcon: const Icon(Icons.search),
-                border:
-                    OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-              ),
-              onChanged: (v) => setState(() => _query = v),
-            ),
-          ),
-          Expanded(
-            child: ListView(
-              children: [
-                if (filteredMatched.isNotEmpty) ...[
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                    child: Text('مسجلون على EG MASR',
-                        style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF006A4E))),
-                  ),
-                  ...filteredMatched.map((m) => ListTile(
-                        leading: const CircleAvatar(
-                          backgroundColor: Color(0xFF006A4E),
-                          child: Icon(Icons.person, color: Colors.white),
-                        ),
-                        title: Text(m['name']),
-                        subtitle: Text(m['phone']),
-                        trailing:
-                            const Icon(Icons.chat, color: Color(0xFF006A4E)),
-                        onTap: () {
-                          Navigator.pushReplacement(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => ChatRoomScreen(
-                                myPhone: w.myPhone,
-                                peerPhone: m['phone'],
-                                peerName: m['name'],
-                              ),
-                            ),
-                          );
-                        },
-                      )),
-                  const Divider(),
-                ],
-                ...filteredAll.map((c) => ListTile(
-                      leading: const CircleAvatar(child: Icon(Icons.phone)),
-                      title: Text(c['name']),
-                      subtitle: Text(c['phone']),
-                      trailing: TextButton(
-                        onPressed: () {
-                          final msg = Uri.encodeComponent(
-                              'انضم معايا على تطبيق EG MASR!');
-                          launchUrl(Uri.parse('sms:${c['phone']}?body=$msg'));
-                        },
-                        child: const Text('دعوة'),
+          ...matched.map((m) => ListTile(
+                leading: const CircleAvatar(
+                    backgroundColor: Color(0xFF006A4E),
+                    child: Icon(Icons.person, color: Colors.white)),
+                title: Text(m['name']),
+                subtitle: Text(m['phone']),
+                onTap: () {
+                  final list = [myPhone, m['phone'].toString()]..sort();
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ChatRoomScreen(
+                        myPhone: myPhone,
+                        roomId: '${list[0]}_${list[1]}',
+                        peerPhone: m['phone'],
+                        title: m['name'],
+                        isGroup: false,
                       ),
-                    )),
-              ],
-            ),
-          ),
+                    ),
+                  );
+                },
+              )),
+          ...allContacts.map((c) => ListTile(
+                leading: const CircleAvatar(child: Icon(Icons.phone)),
+                title: Text(c['name']),
+                subtitle: Text(c['phone']),
+                trailing: TextButton(
+                  onPressed: () => launchUrl(
+                      Uri.parse('sms:${c['phone']}?body=انضم لتطبيق EG MASR')),
+                  child: const Text('دعوة'),
+                ),
+              )),
         ],
       ),
     );
@@ -874,14 +929,26 @@ class _FullContactsScreenState extends State {
 
 class ChatRoomScreen extends StatefulWidget {
   final String myPhone;
+  final String roomId;
   final String peerPhone;
-  final String peerName;
+  final String title;
+  final bool isGroup;
+  final bool isFriend;
+  final String? groupId;
+  final List? groupMembers;
+  final VoidCallback? onRelationChanged;
 
   const ChatRoomScreen({
     super.key,
     required this.myPhone,
+    required this.roomId,
     required this.peerPhone,
-    required this.peerName,
+    required this.title,
+    required this.isGroup,
+    this.isFriend = false,
+    this.groupId,
+    this.groupMembers,
+    this.onRelationChanged,
   });
 
   @override
@@ -897,11 +964,6 @@ class _ChatRoomScreenState extends State {
   Timer? _recTimer;
 
   ChatRoomScreen get w => widget as ChatRoomScreen;
-
-  String get _roomId {
-    final list = [w.myPhone, w.peerPhone]..sort();
-    return '${list[0]}_${list[1]}';
-  }
 
   @override
   void initState() {
@@ -920,11 +982,9 @@ class _ChatRoomScreenState extends State {
       final res = await supabase
           .from('messages')
           .select()
-          .eq('room_id', _roomId)
+          .eq('room_id', w.roomId)
           .order('created_at', ascending: true);
-      if (mounted) {
-        setState(() => _messages = List.from(res));
-      }
+      if (mounted) setState(() => _messages = List.from(res));
     } catch (_) {}
   }
 
@@ -940,7 +1000,7 @@ class _ChatRoomScreenState extends State {
     });
     try {
       await supabase.from('messages').insert({
-        'room_id': _roomId,
+        'room_id': w.roomId,
         'sender_phone': w.myPhone,
         'receiver_phone': w.peerPhone,
         'content': text.trim(),
@@ -965,45 +1025,151 @@ class _ChatRoomScreenState extends State {
         _isRecording = false;
         _recordSeconds = 0;
       });
-      _sendMessage('🎤 رسالة صوتية مسجلة (0:${dur.toString().padLeft(2, '0')})',
+      _sendMessage('🎤 رسالة صوتية (0:${dur.toString().padLeft(2, '0')})',
           type: 'voice');
     }
   }
 
-  Future _pickAndSendMedia() async {
-    final XFile? file =
-        await _picker.pickImage(source: ImageSource.gallery, imageQuality: 70);
-    if (file == null) return;
-    try {
-      final bytes = await file.readAsBytes();
-      final ext = file.name.split('.').last;
-      final path = 'chat_${DateTime.now().millisecondsSinceEpoch}.$ext';
-      await supabase.storage.from('avatars').uploadBinary(path, bytes);
-      final url = supabase.storage.from('avatars').getPublicUrl(path);
-      await _sendMessage(url, type: 'image');
-    } catch (_) {
-      await _sendMessage('[صورة مرفقة: ${file.name}]', type: 'text');
+  Future _addFriend() async {
+    await supabase.from('user_relations').insert({
+      'user_phone': w.myPhone,
+      'target_phone': w.peerPhone,
+      'relation_type': 'friend',
+    });
+    w.onRelationChanged?.call();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تمت الإضافة إلى قائمة الأصدقاء ✅')),
+      );
     }
+  }
+
+  Future _blockUser() async {
+    await supabase.from('user_relations').insert({
+      'user_phone': w.myPhone,
+      'target_phone': w.peerPhone,
+      'relation_type': 'block',
+    });
+    w.onRelationChanged?.call();
+    if (mounted) {
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('تم عمل حظر (Block) لهذا الحساب بنجاح 🚫'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  void _reportUserDialog() {
+    final reasonCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('إبلاغ الإدارة عن حساب مخالف 🚨'),
+        content: TextField(
+          controller: reasonCtrl,
+          decoration: const InputDecoration(
+            labelText: 'سبب الإبلاغ (إزعاج / احتيال / محتوى مخالف)',
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red, foregroundColor: Colors.white),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              await supabase.from('reports').insert({
+                'reporter_phone': w.myPhone,
+                'reported_phone': w.peerPhone,
+                'reason': reasonCtrl.text.trim().isEmpty
+                    ? 'إبلاغ عن إساءة'
+                    : reasonCtrl.text.trim(),
+              });
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                      content: Text('تم إرسال البلاغ للأدمن للمراجعة فوراً ✅')),
+                );
+              }
+            },
+            child: const Text('إرسال البلاغ للأدمن'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _addMemberToGroupDialog() {
+    final phoneCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('إضافة عضو جديد للجروب'),
+        content: TextField(
+          controller: phoneCtrl,
+          keyboardType: TextInputType.phone,
+          decoration: const InputDecoration(labelText: 'رقم موبايل العضو'),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          ElevatedButton(
+            onPressed: () async {
+              final p = phoneCtrl.text.trim();
+              if (p.length >= 11 && w.groupId != null) {
+                Navigator.pop(ctx);
+                final updated = List.from(w.groupMembers ?? [])..add(p);
+                await supabase
+                    .from('groups')
+                    .update({'members': updated}).eq('id', w.groupId!);
+                w.onRelationChanged?.call();
+                _sendMessage('➕ قام ${w.myPhone} بإضافة $p إلى الجروب');
+              }
+            },
+            child: const Text('إضافة'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(w.peerName, style: const TextStyle(fontSize: 16)),
-            Text(w.peerPhone,
-                style: const TextStyle(fontSize: 11, color: Colors.white70)),
-          ],
-        ),
+        title: Text(w.title),
         actions: [
           IconButton(
               icon: const Icon(Icons.refresh), onPressed: _fetchMessages),
-          IconButton(
-              icon: const Icon(Icons.call),
-              onPressed: () => _sendMessage('📞 مكالمة صوتية صادرة')),
+          if (w.isGroup)
+            IconButton(
+              icon: const Icon(Icons.person_add),
+              onPressed: _addMemberToGroupDialog,
+            )
+          else
+            PopupMenuButton(
+              itemBuilder: (_) => [
+                const PopupMenuItem(
+                    value: 'friend', child: Text('إضافة كصديق 👥')),
+                const PopupMenuItem(
+                    value: 'block',
+                    child: Text('حظر الحساب (Block) 🚫',
+                        style: TextStyle(color: Colors.red))),
+                const PopupMenuItem(
+                    value: 'report',
+                    child: Text('إبلاغ للأدمن 🚨',
+                        style: TextStyle(color: Colors.orange))),
+              ],
+              onSelected: (v) {
+                if (v == 'friend') _addFriend();
+                if (v == 'block') _blockUser();
+                if (v == 'report') _reportUserDialog();
+              },
+            ),
         ],
       ),
       body: Column(
@@ -1015,9 +1181,6 @@ class _ChatRoomScreenState extends State {
               itemBuilder: (_, i) {
                 final m = _messages[i];
                 final isMe = m['sender_phone'] == w.myPhone;
-                final type = m['msg_type'] ?? 'text';
-                final content = m['content'].toString();
-
                 return Align(
                   alignment:
                       isMe ? Alignment.centerRight : Alignment.centerLeft,
@@ -1029,16 +1192,22 @@ class _ChatRoomScreenState extends State {
                       color: isMe ? const Color(0xFF006A4E) : Colors.white,
                       borderRadius: BorderRadius.circular(16),
                     ),
-                    child: type == 'image'
-                        ? ClipRRect(
-                            borderRadius: BorderRadius.circular(10),
-                            child: Image.network(content, fit: BoxFit.cover),
-                          )
-                        : Text(
-                            content,
-                            style: TextStyle(
-                                color: isMe ? Colors.white : Colors.black87),
-                          ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (w.isGroup && !isMe)
+                          Text(m['sender_phone'] ?? '',
+                              style: const TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF006A4E))),
+                        Text(
+                          m['content'].toString(),
+                          style: TextStyle(
+                              color: isMe ? Colors.white : Colors.black87),
+                        ),
+                      ],
+                    ),
                   ),
                 );
               },
@@ -1051,12 +1220,16 @@ class _ChatRoomScreenState extends State {
               children: [
                 IconButton(
                   icon: const Icon(Icons.photo, color: Color(0xFF006A4E)),
-                  onPressed: _pickAndSendMedia,
+                  onPressed: () async {
+                    final f =
+                        await _picker.pickImage(source: ImageSource.gallery);
+                    if (f != null) _sendMessage('📷 صورة مرفقة: ${f.name}');
+                  },
                 ),
                 Expanded(
                   child: _isRecording
                       ? Text(
-                          '🔴 جاري تسجيل الصوت... 0:${_recordSeconds.toString().padLeft(2, '0')} (اضغط المايك للإرسال)',
+                          '🔴 جاري تسجيل الصوت... 0:${_recordSeconds.toString().padLeft(2, '0')}',
                           style: const TextStyle(
                               color: Colors.red, fontWeight: FontWeight.bold),
                         )
@@ -1073,7 +1246,6 @@ class _ChatRoomScreenState extends State {
                   icon: Icon(
                     _isRecording ? Icons.stop_circle : Icons.mic,
                     color: _isRecording ? Colors.red : const Color(0xFF006A4E),
-                    size: 28,
                   ),
                   onPressed: _toggleVoiceRecording,
                 ),
@@ -1094,7 +1266,515 @@ class _ChatRoomScreenState extends State {
 }
 
 // ============================================================================
-// 5. WALLET TAB (EG MASR QR + VISA + VODAFONE/ORANGE/ETISALAT/WE WALLETS)
+// 4. SOCIAL FEED TAB (FACEBOOK / INSTAGRAM STYLE + PRIVACY + BLOCK + REPORT)
+// ============================================================================
+class SocialFeedTab extends StatefulWidget {
+  final String currentUserPhone;
+  final bool isAdmin;
+  const SocialFeedTab({
+    super.key,
+    required this.currentUserPhone,
+    required this.isAdmin,
+  });
+
+  @override
+  State createState() => _SocialFeedTabState();
+}
+
+class _SocialFeedTabState extends State {
+  List _posts = [];
+  Set _friends = {};
+  Set _blocked = {};
+  String _myName = 'مستخدم EG Masr';
+  bool _loading = true;
+
+  SocialFeedTab get w => widget as SocialFeedTab;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFeed();
+  }
+
+  Future _loadFeed() async {
+    try {
+      final me = await supabase
+          .from('profiles')
+          .select()
+          .eq('phone', w.currentUserPhone)
+          .maybeSingle();
+      if (me != null) _myName = me['full_name'] ?? _myName;
+
+      final rels = await supabase
+          .from('user_relations')
+          .select()
+          .eq('user_phone', w.currentUserPhone);
+      final fr = <String>{};
+      final bl = <String>{};
+      for (var r in rels) {
+        if (r['relation_type'] == 'friend') {
+          fr.add(r['target_phone'].toString());
+        } else if (r['relation_type'] == 'block') {
+          bl.add(r['target_phone'].toString());
+        }
+      }
+
+      final allPosts = await supabase
+          .from('posts')
+          .select()
+          .order('created_at', ascending: false);
+
+      final filtered = [];
+      for (var p in allPosts) {
+        final author = p['author_phone'].toString();
+        final priv = p['privacy'] ?? 'public';
+        if (bl.contains(author)) continue;
+        if (author == w.currentUserPhone || w.isAdmin) {
+          filtered.add(p);
+        } else if (priv == 'public') {
+          filtered.add(p);
+        } else if (priv == 'friends' && fr.contains(author)) {
+          filtered.add(p);
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _friends = fr;
+          _blocked = bl;
+          _posts = filtered;
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  void _openCreatePostDialog() {
+    final contentCtrl = TextEditingController();
+    String privacy = 'public';
+    String mediaType = 'text';
+    String? uploadedUrl;
+    final picker = ImagePicker();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSt) => AlertDialog(
+          title: const Text('إنشاء منشور جديد في الموجز'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField(
+                  value: privacy,
+                  decoration: const InputDecoration(
+                    labelText: 'خصوصية المنشور (من يمكنه الرؤية؟)',
+                    prefixIcon: Icon(Icons.lock_person),
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                        value: 'public', child: Text('🌍 العامة (الجميع)')),
+                    DropdownMenuItem(
+                        value: 'friends', child: Text('👥 الأصدقاء فقط')),
+                    DropdownMenuItem(
+                        value: 'only_me', child: Text('🔒 أنا فقط')),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) setSt(() => privacy = v.toString());
+                  },
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: contentCtrl,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    hintText: 'بم تفكر؟ شارك صورك أو فيديوهاتك القصيرة...',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () async {
+                          final img = await picker.pickImage(
+                              source: ImageSource.gallery, imageQuality: 70);
+                          if (img != null) {
+                            try {
+                              final bytes = await img.readAsBytes();
+                              final path =
+                                  'post_${DateTime.now().millisecondsSinceEpoch}.jpg';
+                              await supabase.storage
+                                  .from('avatars')
+                                  .uploadBinary(path, bytes);
+                              final url = supabase.storage
+                                  .from('avatars')
+                                  .getPublicUrl(path);
+                              setSt(() {
+                                uploadedUrl = url;
+                                mediaType = 'image';
+                              });
+                            } catch (_) {
+                              setSt(() => mediaType = 'image');
+                            }
+                          }
+                        },
+                        icon: const Icon(Icons.image),
+                        label: const Text('صورة'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () async {
+                          final vid = await picker.pickVideo(
+                              source: ImageSource.gallery);
+                          if (vid != null) {
+                            setSt(() {
+                              uploadedUrl = vid.name;
+                              mediaType = 'video';
+                            });
+                          }
+                        },
+                        icon: const Icon(Icons.video_library),
+                        label: const Text('فيديو قصير'),
+                      ),
+                    ),
+                  ],
+                ),
+                if (mediaType != 'text')
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                        mediaType == 'image'
+                            ? '✅ تم إرفاق صورة'
+                            : '🎬 تم إرفاق فيديو قصير (Reels)',
+                        style: const TextStyle(color: Colors.green)),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('إلغاء')),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF006A4E),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () async {
+                if (contentCtrl.text.trim().isEmpty && mediaType == 'text') {
+                  return;
+                }
+                Navigator.pop(ctx);
+                await supabase.from('posts').insert({
+                  'author_phone': w.currentUserPhone,
+                  'author_name': _myName,
+                  'content': contentCtrl.text.trim(),
+                  'media_url': uploadedUrl ?? '',
+                  'media_type': mediaType,
+                  'privacy': privacy,
+                  'likes': [],
+                  'comments': [],
+                });
+                _loadFeed();
+              },
+              child: const Text('نشر الآن'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future _toggleLike(Map post) async {
+    final likes = List.from(post['likes'] ?? []);
+    if (likes.contains(w.currentUserPhone)) {
+      likes.remove(w.currentUserPhone);
+    } else {
+      likes.add(w.currentUserPhone);
+    }
+    await supabase
+        .from('posts')
+        .update({'likes': likes}).eq('id', post['id']);
+    _loadFeed();
+  }
+
+  void _openCommentsDialog(Map post) {
+    final commentCtrl = TextEditingController();
+    final comments = List.from(post['comments'] ?? []);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('التعليقات 💬'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                height: 180,
+                child: comments.isEmpty
+                    ? const Center(child: Text('لا توجد تعليقات بعد'))
+                    : ListView.builder(
+                        itemCount: comments.length,
+                        itemBuilder: (_, i) {
+                          final c = comments[i];
+                          return ListTile(
+                            dense: true,
+                            title: Text(c['name'] ?? ''),
+                            subtitle: Text(c['text'] ?? ''),
+                          );
+                        },
+                      ),
+              ),
+              TextField(
+                controller: commentCtrl,
+                decoration: const InputDecoration(hintText: 'اكتب تعليقك...'),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('إغلاق')),
+          ElevatedButton(
+            onPressed: () async {
+              if (commentCtrl.text.trim().isEmpty) return;
+              Navigator.pop(ctx);
+              comments.add({
+                'phone': w.currentUserPhone,
+                'name': _myName,
+                'text': commentCtrl.text.trim(),
+              });
+              await supabase
+                  .from('posts')
+                  .update({'comments': comments}).eq('id', post['id']);
+              _loadFeed();
+            },
+            child: const Text('تعليق'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('موجز EG MASR'),
+        actions: [
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadFeed),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _posts.isEmpty
+              ? Center(
+                  child: ElevatedButton.icon(
+                    onPressed: _openCreatePostDialog,
+                    icon: const Icon(Icons.add),
+                    label: const Text('انشر أول بوست أو فيديو قصير'),
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.all(12),
+                  itemCount: _posts.length,
+                  itemBuilder: (_, i) {
+                    final p = _posts[i];
+                    final likes = List.from(p['likes'] ?? []);
+                    final comments = List.from(p['comments'] ?? []);
+                    final isLiked = likes.contains(w.currentUserPhone);
+                    final priv = p['privacy'] ?? 'public';
+
+                    return Card(
+                      margin: const EdgeInsets.only(bottom: 14),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(18)),
+                      child: Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const CircleAvatar(
+                                  backgroundColor: Color(0xFF006A4E),
+                                  child:
+                                      Icon(Icons.person, color: Colors.white),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(p['author_name'] ?? '',
+                                          style: const TextStyle(
+                                              fontWeight: FontWeight.bold)),
+                                      Text(
+                                        priv == 'public'
+                                            ? '🌍 عام'
+                                            : priv == 'friends'
+                                                ? '👥 الأصدقاء'
+                                                : '🔒 أنا فقط',
+                                        style: const TextStyle(
+                                            fontSize: 11, color: Colors.grey),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                if (p['author_phone'] != w.currentUserPhone)
+                                  PopupMenuButton(
+                                    itemBuilder: (_) => [
+                                      const PopupMenuItem(
+                                          value: 'friend',
+                                          child: Text('إضافة صديق 👥')),
+                                      const PopupMenuItem(
+                                          value: 'block',
+                                          child: Text('حظر (Block) 🚫',
+                                              style: TextStyle(
+                                                  color: Colors.red))),
+                                      const PopupMenuItem(
+                                          value: 'report',
+                                          child: Text('إبلاغ للأدمن 🚨',
+                                              style: TextStyle(
+                                                  color: Colors.orange))),
+                                    ],
+                                    onSelected: (v) async {
+                                      final target =
+                                          p['author_phone'].toString();
+                                      if (v == 'friend') {
+                                        await supabase
+                                            .from('user_relations')
+                                            .insert({
+                                          'user_phone': w.currentUserPhone,
+                                          'target_phone': target,
+                                          'relation_type': 'friend',
+                                        });
+                                        _loadFeed();
+                                      } else if (v == 'block') {
+                                        await supabase
+                                            .from('user_relations')
+                                            .insert({
+                                          'user_phone': w.currentUserPhone,
+                                          'target_phone': target,
+                                          'relation_type': 'block',
+                                        });
+                                        _loadFeed();
+                                      } else if (v == 'report') {
+                                        await supabase.from('reports').insert({
+                                          'reporter_phone': w.currentUserPhone,
+                                          'reported_phone': target,
+                                          'reason':
+                                              'إبلاغ عن منشور مخالف في الموجز',
+                                        });
+                                        if (mounted) {
+                                          ScaffoldMessenger.of(context)
+                                              .showSnackBar(
+                                            const SnackBar(
+                                                content: Text(
+                                                    'وصل البلاغ للأدمن فوراً 🚨')),
+                                          );
+                                        }
+                                      }
+                                    },
+                                  ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            if ((p['content'] ?? '').toString().isNotEmpty)
+                              Text(p['content'],
+                                  style: const TextStyle(fontSize: 15)),
+                            if (p['media_type'] == 'image' &&
+                                (p['media_url'] ?? '')
+                                    .toString()
+                                    .startsWith('http')) ...[
+                              const SizedBox(height: 10),
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(12),
+                                child: Image.network(p['media_url'],
+                                    fit: BoxFit.cover),
+                              ),
+                            ] else if (p['media_type'] == 'video') ...[
+                              const SizedBox(height: 10),
+                              Container(
+                                height: 140,
+                                decoration: BoxDecoration(
+                                  color: Colors.black87,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: const Center(
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(Icons.play_circle_fill,
+                                          color: Color(0xFFD4AF37), size: 48),
+                                      Text('فيديو قصير (EG MASR Reels)',
+                                          style:
+                                              TextStyle(color: Colors.white)),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                            const Divider(),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceAround,
+                              children: [
+                                TextButton.icon(
+                                  onPressed: () => _toggleLike(p),
+                                  icon: Icon(
+                                    isLiked
+                                        ? Icons.favorite
+                                        : Icons.favorite_border,
+                                    color: isLiked ? Colors.red : Colors.grey,
+                                  ),
+                                  label: Text('إعجاب (${likes.length})'),
+                                ),
+                                TextButton.icon(
+                                  onPressed: () => _openCommentsDialog(p),
+                                  icon: const Icon(Icons.comment_outlined),
+                                  label: Text('تعليق (${comments.length})'),
+                                ),
+                                TextButton.icon(
+                                  onPressed: () {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                          content: Text(
+                                              'تمت مشاركة المنشور على صفحتك ✅')),
+                                    );
+                                  },
+                                  icon: const Icon(Icons.share_outlined),
+                                  label: const Text('مشاركة'),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+      floatingActionButton: FloatingActionButton.extended(
+        backgroundColor: const Color(0xFF006A4E),
+        foregroundColor: Colors.white,
+        onPressed: _openCreatePostDialog,
+        icon: const Icon(Icons.add_a_photo),
+        label: const Text('نشر بالموجز'),
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// 5. WALLET TAB (EG MASR QR + WALLETS + ADMIN REPORTS & COMPANIES)
 // ============================================================================
 class WalletTab extends StatefulWidget {
   final String currentUserPhone;
@@ -1150,43 +1830,6 @@ class _WalletTabState extends State {
     } catch (_) {}
   }
 
-  void _showAlertDialog(String title, String body) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF004D38),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(
-          children: [
-            const Icon(Icons.notifications_active, color: Color(0xFFD4AF37)),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(title,
-                  style: const TextStyle(
-                      color: Color(0xFFD4AF37),
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold)),
-            ),
-          ],
-        ),
-        content: Text(
-          body,
-          style: const TextStyle(color: Colors.white, height: 1.5),
-        ),
-        actions: [
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFD4AF37),
-              foregroundColor: Colors.black,
-            ),
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('تم'),
-          ),
-        ],
-      ),
-    );
-  }
-
   void _openLinkPaymentMethodDialog() {
     String selectedProvider = 'فودافون كاش (Vodafone Cash)';
     final numberCtrl = TextEditingController();
@@ -1195,7 +1838,7 @@ class _WalletTabState extends State {
     final providers = [
       'بطاقة بنكية (Visa / Mastercard / Meeza)',
       'فودافون كاش (Vodafone Cash)',
-      'أورانج كاش (Orange Cash - موبينيل)',
+      'أورانج كاش (Orange Cash)',
       'اتصالات كاش (e& Money)',
       'وي باي (WE Pay)',
     ];
@@ -1208,18 +1851,10 @@ class _WalletTabState extends State {
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('اختر وسيلة الدفع / المحفظة:',
-                    style: TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
                 DropdownButtonFormField(
                   value: selectedProvider,
                   isExpanded: true,
-                  decoration: InputDecoration(
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                  ),
                   items: providers
                       .map((p) => DropdownMenuItem(value: p, child: Text(p)))
                       .toList(),
@@ -1235,21 +1870,16 @@ class _WalletTabState extends State {
                   keyboardType: TextInputType.number,
                   decoration: InputDecoration(
                     labelText: selectedProvider.contains('بطاقة')
-                        ? 'رقم الفيزا / البطاقة (16 رقم)'
-                        : 'رقم موبايل المحفظة (01xxxxxxxxx)',
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12)),
+                        ? 'رقم الفيزا (16 رقم)'
+                        : 'رقم المحفظة (01xxxxxxxxx)',
                   ),
                 ),
                 const SizedBox(height: 12),
                 TextField(
                   controller: depositCtrl,
                   keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    labelText: 'مبلغ الشحن لحسابك في EG MASR (ج.م)',
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                  ),
+                  decoration: const InputDecoration(
+                      labelText: 'مبلغ الشحن الفوري لحسابك (ج.م)'),
                 ),
               ],
             ),
@@ -1259,20 +1889,10 @@ class _WalletTabState extends State {
                 onPressed: () => Navigator.pop(ctx),
                 child: const Text('إلغاء')),
             ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF006A4E),
-                foregroundColor: Colors.white,
-              ),
               onPressed: () async {
                 final numStr = numberCtrl.text.trim();
                 final amt = double.tryParse(depositCtrl.text.trim()) ?? 0.0;
-                if (numStr.length < 11) {
-                  ScaffoldMessenger.of(ctx).showSnackBar(
-                    const SnackBar(
-                        content: Text('أدخل رقم بطاقة أو رقم محفظة صحيح')),
-                  );
-                  return;
-                }
+                if (numStr.length < 11) return;
                 Navigator.pop(ctx);
                 final last4 = numStr.substring(numStr.length - 4);
                 final label = '$selectedProvider (****$last4)';
@@ -1287,30 +1907,21 @@ class _WalletTabState extends State {
                   _balance = newBal;
                 });
 
-                try {
-                  await supabase
-                      .from('profiles')
-                      .update({'balance': newBal}).eq(
-                          'phone', w.currentUserPhone);
-                  if (amt > 0) {
-                    await supabase.from('transactions').insert({
-                      'ref_code': ref,
-                      'sender_phone': 'TOPUP_WALLET',
-                      'receiver_phone': w.currentUserPhone,
-                      'amount': amt,
-                      'tx_type': 'deposit',
-                      'note': 'شحن من $label',
-                    });
-                  }
-                } catch (_) {}
-
-                _loadAllWalletData();
-                if (amt > 0 && mounted) {
-                  _showAlertDialog(
-                    'إشعار إيداع رصيد - EG MASR',
-                    'تم شحن حسابك رقم ${w.currentUserPhone} بمبلغ ${amt.toStringAsFixed(2)} ج.م عبر $label.\n\nرصيدك الحالي: ${newBal.toStringAsFixed(2)} ج.م\nرقم العملية: #$ref',
-                  );
+                await supabase
+                    .from('profiles')
+                    .update({'balance': newBal}).eq(
+                        'phone', w.currentUserPhone);
+                if (amt > 0) {
+                  await supabase.from('transactions').insert({
+                    'ref_code': ref,
+                    'sender_phone': 'TOPUP_WALLET',
+                    'receiver_phone': w.currentUserPhone,
+                    'amount': amt,
+                    'tx_type': 'deposit',
+                    'note': 'شحن من $label',
+                  });
                 }
+                _loadAllWalletData();
               },
               child: const Text('ربط وشحن الآن'),
             ),
@@ -1321,60 +1932,57 @@ class _WalletTabState extends State {
   }
 
   Future _executeRealTransfer(String toPhone, double amount) async {
-    if (amount <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('أدخل مبلغاً صحيحاً أكبر من 0')),
-      );
-      return;
-    }
-    if (amount > _balance) {
+    if (amount <= 0 || amount > _balance) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-              'عفواً، رصيدك الحالي لا يكفي! اشحن محفظتك من الفيزا أو فودافون/أورانج/اتصالات كاش'),
-          backgroundColor: Colors.red,
-        ),
+            content: Text('الرصيد غير كافٍ أو المبلغ غير صحيح!'),
+            backgroundColor: Colors.red),
       );
       return;
     }
 
     final newSenderBal = _balance - amount;
     final ref = 'TRX${Random().nextInt(899999) + 100000}';
-
     setState(() => _balance = newSenderBal);
 
-    try {
+    await supabase
+        .from('profiles')
+        .update({'balance': newSenderBal}).eq('phone', w.currentUserPhone);
+
+    final rec = await supabase
+        .from('profiles')
+        .select()
+        .eq('phone', toPhone)
+        .maybeSingle();
+    if (rec != null) {
+      final recNewBal = (rec['balance'] ?? 0.0).toDouble() + amount;
       await supabase
           .from('profiles')
-          .update({'balance': newSenderBal}).eq('phone', w.currentUserPhone);
+          .update({'balance': recNewBal}).eq('phone', toPhone);
+    }
 
-      final rec = await supabase
-          .from('profiles')
-          .select()
-          .eq('phone', toPhone)
-          .maybeSingle();
-      if (rec != null) {
-        final recNewBal = (rec['balance'] ?? 0.0).toDouble() + amount;
-        await supabase
-            .from('profiles')
-            .update({'balance': recNewBal}).eq('phone', toPhone);
-      }
-
-      await supabase.from('transactions').insert({
-        'ref_code': ref,
-        'sender_phone': w.currentUserPhone,
-        'receiver_phone': toPhone,
-        'amount': amount,
-        'tx_type': 'transfer',
-        'note': 'تحويل فوري إلى $toPhone',
-      });
-    } catch (_) {}
+    await supabase.from('transactions').insert({
+      'ref_code': ref,
+      'sender_phone': w.currentUserPhone,
+      'receiver_phone': toPhone,
+      'amount': amount,
+      'tx_type': 'transfer',
+      'note': 'تحويل فوري إلى $toPhone',
+    });
 
     _loadAllWalletData();
     if (mounted) {
-      _showAlertDialog(
-        'إشعار خصم وتحويل - EG MASR',
-        'تم خصم مبلغ ${amount.toStringAsFixed(2)} ج.م من حسابك رقم ${w.currentUserPhone} وتحويله بنجاح إلى المستلم $toPhone.\n\nرصيدك المتاح الآن: ${newSenderBal.toStringAsFixed(2)} ج.م\nرقم المرجع: #$ref',
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('إشعار خصم وتحويل - EG MASR'),
+          content: Text(
+              'تم خصم ${amount.toStringAsFixed(2)} ج.م وتحويلها إلى $toPhone.\nالرصيد المتاح: ${newSenderBal.toStringAsFixed(2)} ج.م\nمرجع: #$ref'),
+          actions: [
+            ElevatedButton(
+                onPressed: () => Navigator.pop(ctx), child: const Text('تم'))
+          ],
+        ),
       );
     }
   }
@@ -1412,7 +2020,7 @@ class _WalletTabState extends State {
               Navigator.pop(ctx);
               _executeRealTransfer(p, a);
             },
-            child: const Text('تأكيد التحويل والخصم'),
+            child: const Text('تأكيد التحويل'),
           ),
         ],
       ),
@@ -1437,8 +2045,7 @@ class _WalletTabState extends State {
               onPressed: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(
-                      builder: (_) => const AdminCompaniesScreen()),
+                  MaterialPageRoute(builder: (_) => const AdminMasterScreen()),
                 );
               },
             ),
@@ -1465,15 +2072,17 @@ class _WalletTabState extends State {
               color: const Color(0xFFD4AF37),
               margin: const EdgeInsets.only(bottom: 12),
               child: ListTile(
-                leading: const Icon(Icons.verified_user, color: Colors.black),
-                title: const Text('لوحة الأدمن (اعتماد الشركات)',
+                leading: const Icon(Icons.admin_panel_settings,
+                    color: Colors.black),
+                title: const Text(
+                    'لوحة تحكم الأدمن (الشركات • البلاغات • الطلبات)',
                     style: TextStyle(fontWeight: FontWeight.bold)),
                 trailing: const Icon(Icons.arrow_forward_ios, size: 16),
                 onTap: () {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                        builder: (_) => const AdminCompaniesScreen()),
+                        builder: (_) => const AdminMasterScreen()),
                   );
                 },
               ),
@@ -1607,149 +2216,180 @@ class _WalletTabState extends State {
           const Text('سجل العمليات المالية وكشف الحساب',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
-          if (_txHistory.isEmpty)
-            const Card(
-              child: Padding(
-                padding: EdgeInsets.all(16),
-                child: Text('لا توجد معاملات مالية مسجلة حتى الآن'),
-              ),
-            )
-          else
-            ..._txHistory.map((tx) {
-              final isOut = tx['sender_phone'] == w.currentUserPhone;
-              return Card(
-                child: ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor:
-                        isOut ? Colors.red.shade50 : Colors.green.shade50,
-                    child: Icon(
-                      isOut ? Icons.arrow_upward : Icons.arrow_downward,
-                      color: isOut ? Colors.red : Colors.green,
-                    ),
-                  ),
-                  title: Text(tx['note'] ?? ''),
-                  subtitle: Text('مرجع: #${tx['ref_code']}'),
-                  trailing: Text(
-                    '${isOut ? '-' : '+'}${tx['amount']} ج.م',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: isOut ? Colors.red : Colors.green,
-                    ),
+          ..._txHistory.map((tx) {
+            final isOut = tx['sender_phone'] == w.currentUserPhone;
+            return Card(
+              child: ListTile(
+                leading: CircleAvatar(
+                  backgroundColor:
+                      isOut ? Colors.red.shade50 : Colors.green.shade50,
+                  child: Icon(
+                    isOut ? Icons.arrow_upward : Icons.arrow_downward,
+                    color: isOut ? Colors.red : Colors.green,
                   ),
                 ),
-              );
-            }),
+                title: Text(tx['note'] ?? ''),
+                subtitle: Text('مرجع: #${tx['ref_code']}'),
+                trailing: Text(
+                  '${isOut ? '-' : '+'}${tx['amount']} ج.م',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: isOut ? Colors.red : Colors.green,
+                  ),
+                ),
+              ),
+            );
+          }),
         ],
       ),
     );
   }
 }
 
-class AdminCompaniesScreen extends StatefulWidget {
-  const AdminCompaniesScreen({super.key});
+class AdminMasterScreen extends StatefulWidget {
+  const AdminMasterScreen({super.key});
 
   @override
-  State createState() => _AdminCompaniesScreenState();
+  State createState() => _AdminMasterScreenState();
 }
 
-class _AdminCompaniesScreenState extends State {
+class _AdminMasterScreenState extends State {
   List _companies = [];
-  bool _loading = true;
+  List _reports = [];
+  List _orders = [];
 
   @override
   void initState() {
     super.initState();
-    _loadCompanies();
+    _loadAdminData();
   }
 
-  Future _loadCompanies() async {
-    setState(() => _loading = true);
+  Future _loadAdminData() async {
     try {
-      final res = await supabase
+      final comps = await supabase
           .from('companies')
           .select()
           .order('created_at', ascending: false);
-      setState(() => _companies = List.from(res));
+      final reps = await supabase
+          .from('reports')
+          .select()
+          .order('created_at', ascending: false);
+      final txs = await supabase
+          .from('transactions')
+          .select()
+          .eq('tx_type', 'service')
+          .order('created_at', ascending: false);
+      if (mounted) {
+        setState(() {
+          _companies = List.from(comps);
+          _reports = List.from(reps);
+          _orders = List.from(txs);
+        });
+      }
     } catch (_) {}
-    if (mounted) setState(() => _loading = false);
-  }
-
-  Future _updateStatus(String id, String status) async {
-    await supabase.from('companies').update({'status': status}).eq('id', id);
-    _loadCompanies();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('إدارة واعتماد الشركات (Admin)')),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _companies.isEmpty
-              ? const Center(child: Text('لا توجد طلبات شركات حالياً'))
-              : ListView.builder(
-                  padding: const EdgeInsets.all(12),
-                  itemCount: _companies.length,
-                  itemBuilder: (_, i) {
-                    final c = _companies[i];
-                    final status = c['status'] ?? 'pending';
-                    return Card(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      child: Padding(
-                        padding: const EdgeInsets.all(14),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(c['company_name'] ?? '',
-                                style: const TextStyle(
-                                    fontSize: 18, fontWeight: FontWeight.bold)),
-                            Text('العنوان: ${c['company_address']}'),
-                            Text('الرقم الضريبي: ${c['tax_id']}'),
-                            Text('المفوض: ${c['delegate_name']}'),
-                            Text('الموبايل: ${c['phone']}'),
-                            const SizedBox(height: 8),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Chip(
-                                  label: Text(status == 'approved'
-                                      ? 'معتمد ✅'
-                                      : status == 'rejected'
-                                          ? 'مرفوض ❌'
-                                          : 'قيد المراجعة ⏳'),
-                                ),
-                                Row(
-                                  children: [
-                                    ElevatedButton(
-                                      style: ElevatedButton.styleFrom(
-                                          backgroundColor: Colors.green,
-                                          foregroundColor: Colors.white),
-                                      onPressed: () =>
-                                          _updateStatus(c['id'], 'approved'),
-                                      child: const Text('موافقة'),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    OutlinedButton(
-                                      onPressed: () =>
-                                          _updateStatus(c['id'], 'rejected'),
-                                      child: const Text('رفض'),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ],
+    return DefaultTabController(
+      length: 3,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('لوحة تحكم الأدمن الشاملة'),
+          bottom: const TabBar(
+            indicatorColor: Color(0xFFD4AF37),
+            labelColor: Colors.white,
+            tabs: [
+              Tab(text: 'الشركات'),
+              Tab(text: 'البلاغات 🚨'),
+              Tab(text: 'طلبات الشحن/الحجز'),
+            ],
+          ),
+        ),
+        body: TabBarView(
+          children: [
+            ListView.builder(
+              padding: const EdgeInsets.all(12),
+              itemCount: _companies.length,
+              itemBuilder: (_, i) {
+                final c = _companies[i];
+                return Card(
+                  child: ListTile(
+                    title: Text(c['company_name'] ?? ''),
+                    subtitle: Text(
+                        'الضريبي: ${c['tax_id']} | الحالة: ${c['status']}'),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.check_circle,
+                              color: Colors.green),
+                          onPressed: () async {
+                            await supabase
+                                .from('companies')
+                                .update({'status': 'approved'}).eq(
+                                    'id', c['id']);
+                            _loadAdminData();
+                          },
                         ),
-                      ),
-                    );
-                  },
-                ),
+                        IconButton(
+                          icon: const Icon(Icons.cancel, color: Colors.red),
+                          onPressed: () async {
+                            await supabase
+                                .from('companies')
+                                .update({'status': 'rejected'}).eq(
+                                    'id', c['id']);
+                            _loadAdminData();
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+            ListView.builder(
+              padding: const EdgeInsets.all(12),
+              itemCount: _reports.length,
+              itemBuilder: (_, i) {
+                final r = _reports[i];
+                return Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.report, color: Colors.red),
+                    title: Text('بلاغ ضد: ${r['reported_phone']}'),
+                    subtitle: Text(
+                        'السبب: ${r['reason']}\nالمُبلّغ: ${r['reporter_phone']}'),
+                  ),
+                );
+              },
+            ),
+            ListView.builder(
+              padding: const EdgeInsets.all(12),
+              itemCount: _orders.length,
+              itemBuilder: (_, i) {
+                final o = _orders[i];
+                return Card(
+                  child: ListTile(
+                    leading:
+                        const Icon(Icons.receipt, color: Color(0xFF006A4E)),
+                    title: Text(o['note'] ?? ''),
+                    subtitle: Text(
+                        'العميل: ${o['sender_phone']} | مرجع: #${o['ref_code']}'),
+                    trailing: Text('${o['amount']} ج.م',
+                        style: const TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
 
 // ============================================================================
-// 6. IN-APP SERVICE PROVIDER ENGINE (FAWRY BILLS + PUBG/FF TOPUP + TRAINS)
+// 6. SERVICES TAB (BOOKING.COM STYLE HOTELS + REAL RESTAURANTS + BILLS/GAMES)
 // ============================================================================
 class ServicesTab extends StatelessWidget {
   final String currentUserPhone;
@@ -1760,8 +2400,8 @@ class ServicesTab extends StatelessWidget {
     required this.isCorporate,
   });
 
-  Future _chargeUserWalletAndLog(
-      BuildContext context, double amount, String serviceName, String details) async {
+  Future _chargeUserWalletAndLog(BuildContext context, double amount,
+      String serviceName, String details) async {
     try {
       final prof = await supabase
           .from('profiles')
@@ -1774,7 +2414,7 @@ class ServicesTab extends StatelessWidget {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
-                  'رصيدك الحالي ($currentBal ج.م) غير كافٍ لإتمام الخدمة ($amount ج.م). اشحن محفظتك أولاً!'),
+                  'رصيدك الحالي ($currentBal ج.م) غير كافٍ لإتمام العملية ($amount ج.م). اشحن محفظتك أولاً!'),
               backgroundColor: Colors.red,
             ),
           );
@@ -1783,7 +2423,7 @@ class ServicesTab extends StatelessWidget {
       }
 
       final newBal = currentBal - amount;
-      final ref = 'SRV${Random().nextInt(899999) + 100000}';
+      final ref = 'EGM${Random().nextInt(899999) + 100000}';
       await supabase
           .from('profiles')
           .update({'balance': newBal}).eq('phone', currentUserPhone);
@@ -1807,12 +2447,12 @@ class ServicesTab extends StatelessWidget {
               children: [
                 Icon(Icons.check_circle, color: Color(0xFFD4AF37)),
                 SizedBox(width: 8),
-                Text('إيصال دفع إلكتروني - EG MASR',
+                Text('إيصال تنفيذ رسمي - EG MASR',
                     style: TextStyle(color: Color(0xFFD4AF37), fontSize: 16)),
               ],
             ),
             content: Text(
-              'الخدمة: $serviceName\nالتفاصيل: $details\nالمبلغ المخصوم: ${amount.toStringAsFixed(2)} ج.م\nالرصيد المتبقي: ${newBal.toStringAsFixed(2)} ج.م\nرقم الإيصال: #$ref',
+              'الخدمة: $serviceName\nالتفاصيل: $details\nالمبلغ المخصوم: ${amount.toStringAsFixed(2)} ج.م\nالرصيد المتبقي: ${newBal.toStringAsFixed(2)} ج.م\nرقم المرجع: #$ref',
               style: const TextStyle(color: Colors.white, height: 1.5),
             ),
             actions: [
@@ -1833,6 +2473,19 @@ class ServicesTab extends StatelessWidget {
     }
   }
 
+  void _openBookingStyleHotelScreen(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => BookingHotelsScreen(
+          onBookHotel: (hotelName, details, totalPrice) =>
+              _chargeUserWalletAndLog(
+                  context, totalPrice, 'حجز فندق: $hotelName', details),
+        ),
+      ),
+    );
+  }
+
   void _openInAppFawryBillScreen(
       BuildContext context, String title, String inputLabel) {
     final accCtrl = TextEditingController();
@@ -1844,16 +2497,12 @@ class ServicesTab extends StatelessWidget {
       MaterialPageRoute(
         builder: (ctx) => StatefulBuilder(
           builder: (ctx, setSt) => Scaffold(
-            appBar: AppBar(title: Text('$title - خدمة EG MASR')),
+            appBar: AppBar(title: Text('$title - EG MASR')),
             body: Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('استعلام وسداد $title مباشرة',
-                      style: const TextStyle(
-                          fontSize: 18, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 14),
                   TextField(
                     controller: accCtrl,
                     keyboardType: TextInputType.number,
@@ -1873,49 +2522,36 @@ class ServicesTab extends StatelessWidget {
                         foregroundColor: Colors.white,
                       ),
                       onPressed: () {
-                        if (accCtrl.text.trim().length < 5) {
-                          ScaffoldMessenger.of(ctx).showSnackBar(
-                            const SnackBar(
-                                content: Text('أدخل رقم الحساب / الموبايل صحيح')),
-                          );
-                          return;
-                        }
-                        final generatedBill =
-                            (50 + Random().nextInt(250)).toDouble();
+                        if (accCtrl.text.trim().length < 5) return;
                         setSt(() {
                           queried = true;
-                          fetchedBillAmount = generatedBill;
+                          fetchedBillAmount =
+                              (65 + Random().nextInt(280)).toDouble();
                         });
                       },
                       child: const Text('استعلام عن الفاتورة / قيمة الشحن'),
                     ),
                   ),
                   if (queried && fetchedBillAmount != null) ...[
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 20),
                     Card(
                       color: Colors.green.shade50,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16)),
                       child: Padding(
                         padding: const EdgeInsets.all(16),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('رقم الحساب: ${accCtrl.text}',
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.bold)),
-                            const SizedBox(height: 6),
+                            Text('رقم الحساب: ${accCtrl.text}'),
                             Text(
-                                'المبلغ المستحق للسداد: ${fetchedBillAmount!.toStringAsFixed(2)} ج.م',
+                                'المبلغ المستحق: ${fetchedBillAmount!.toStringAsFixed(2)} ج.م',
                                 style: const TextStyle(
                                     fontSize: 18,
                                     fontWeight: FontWeight.bold,
                                     color: Color(0xFF006A4E))),
-                            const SizedBox(height: 14),
+                            const SizedBox(height: 12),
                             SizedBox(
                               width: double.infinity,
-                              height: 48,
-                              child: ElevatedButton.icon(
+                              child: ElevatedButton(
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: const Color(0xFFD4AF37),
                                   foregroundColor: Colors.black,
@@ -1925,14 +2561,11 @@ class ServicesTab extends StatelessWidget {
                                     context,
                                     fetchedBillAmount!,
                                     title,
-                                    'حساب ${accCtrl.text}',
+                                    'رقم ${accCtrl.text}',
                                   );
                                   if (ok && ctx.mounted) Navigator.pop(ctx);
                                 },
-                                icon: const Icon(Icons.payment),
-                                label: const Text('سداد وخصم من المحفظة الآن',
-                                    style:
-                                        TextStyle(fontWeight: FontWeight.bold)),
+                                child: const Text('سداد وخصم من المحفظة الآن'),
                               ),
                             ),
                           ],
@@ -1956,13 +2589,11 @@ class ServicesTab extends StatelessWidget {
             {'name': '60 شدة PUBG UC', 'price': 45.0},
             {'name': '325 شدة PUBG UC', 'price': 220.0},
             {'name': '660 شدة PUBG UC', 'price': 430.0},
-            {'name': '1800 شدة PUBG UC', 'price': 1080.0},
           ]
         : [
             {'name': '100 جوهرة Free Fire', 'price': 40.0},
             {'name': '310 جوهرة Free Fire', 'price': 115.0},
             {'name': '520 جوهرة Free Fire', 'price': 190.0},
-            {'name': '1060 جوهرة Free Fire', 'price': 375.0},
           ];
     int selectedIdx = 0;
 
@@ -1972,37 +2603,27 @@ class ServicesTab extends StatelessWidget {
         builder: (ctx) => StatefulBuilder(
           builder: (ctx, setSt) => Scaffold(
             appBar: AppBar(
-                title: Text(isPubg
-                    ? 'شحن شدات ببجي PUBG المباشر'
-                    : 'شحن جواهر فري فاير المباشر')),
+                title: Text(isPubg ? 'شحن شدات ببجي PUBG' : 'شحن جواهر فري فاير')),
             body: Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   TextField(
                     controller: playerIdCtrl,
                     keyboardType: TextInputType.number,
                     decoration: InputDecoration(
                       labelText: 'أدخل معرف اللاعب (Player ID)',
-                      prefixIcon: const Icon(Icons.sports_esports),
                       border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(14)),
                     ),
                   ),
                   const SizedBox(height: 16),
-                  const Text('اختر الباقة:',
-                      style:
-                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 10),
                   ...List.generate(packages.length, (i) {
                     final pkg = packages[i];
                     return RadioListTile(
                       value: i,
                       groupValue: selectedIdx,
-                      activeColor: const Color(0xFF006A4E),
-                      title: Text(pkg['name'] as String,
-                          style: const TextStyle(fontWeight: FontWeight.bold)),
+                      title: Text(pkg['name'] as String),
                       subtitle: Text('${pkg['price']} ج.م'),
                       onChanged: (v) {
                         if (v != null) setSt(() => selectedIdx = v as int);
@@ -2019,25 +2640,17 @@ class ServicesTab extends StatelessWidget {
                         foregroundColor: Colors.white,
                       ),
                       onPressed: () async {
-                        if (playerIdCtrl.text.trim().length < 5) {
-                          ScaffoldMessenger.of(ctx).showSnackBar(
-                            const SnackBar(
-                                content: Text('أدخل Player ID صحيح أولاً')),
-                          );
-                          return;
-                        }
+                        if (playerIdCtrl.text.trim().length < 5) return;
                         final chosen = packages[selectedIdx];
                         final ok = await _chargeUserWalletAndLog(
                           context,
                           chosen['price'] as double,
                           chosen['name'] as String,
-                          'Player ID: ${playerIdCtrl.text.trim()}',
+                          'ID: ${playerIdCtrl.text.trim()}',
                         );
                         if (ok && ctx.mounted) Navigator.pop(ctx);
                       },
-                      child: const Text('تأكيد الشحن الفوري للحساب',
-                          style: TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.bold)),
+                      child: const Text('تأكيد الشحن الفوري'),
                     ),
                   ),
                 ],
@@ -2052,9 +2665,7 @@ class ServicesTab extends StatelessWidget {
   void _openInAppTrainBookingScreen(BuildContext context) {
     String fromStation = 'القاهرة (رمسيس)';
     String toStation = 'الإسكندرية';
-    String trainClass = 'VIP درجة أولى مكيفة (185 ج.م)';
     double ticketPrice = 185.0;
-
     final stations = [
       'القاهرة (رمسيس)',
       'الإسكندرية',
@@ -2071,17 +2682,14 @@ class ServicesTab extends StatelessWidget {
       MaterialPageRoute(
         builder: (ctx) => StatefulBuilder(
           builder: (ctx, setSt) => Scaffold(
-            appBar: AppBar(title: const Text('حجز قطارات مصر (تذكرتي EG MASR)')),
+            appBar: AppBar(title: const Text('حجز قطارات مصر (تذكرتي)')),
             body: Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('محطة القيام:',
-                      style: TextStyle(fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 6),
                   DropdownButtonFormField(
                     value: fromStation,
+                    decoration: const InputDecoration(labelText: 'محطة القيام'),
                     items: stations
                         .map((s) => DropdownMenuItem(value: s, child: Text(s)))
                         .toList(),
@@ -2090,11 +2698,9 @@ class ServicesTab extends StatelessWidget {
                     },
                   ),
                   const SizedBox(height: 14),
-                  const Text('محطة الوصول:',
-                      style: TextStyle(fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 6),
                   DropdownButtonFormField(
                     value: toStation,
+                    decoration: const InputDecoration(labelText: 'محطة الوصول'),
                     items: stations
                         .map((s) => DropdownMenuItem(value: s, child: Text(s)))
                         .toList(),
@@ -2102,43 +2708,11 @@ class ServicesTab extends StatelessWidget {
                       if (v != null) setSt(() => toStation = v.toString());
                     },
                   ),
-                  const SizedBox(height: 14),
-                  const Text('نوع القطار والدرجة:',
-                      style: TextStyle(fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 6),
-                  DropdownButtonFormField(
-                    value: trainClass,
-                    items: const [
-                      DropdownMenuItem(
-                          value: 'VIP درجة أولى مكيفة (185 ج.م)',
-                          child: Text('VIP درجة أولى مكيفة (185 ج.م)')),
-                      DropdownMenuItem(
-                          value: 'تالجو الفاخر (275 ج.م)',
-                          child: Text('تالجو الفاخر (275 ج.م)')),
-                      DropdownMenuItem(
-                          value: 'روسي مكيف (95 ج.م)',
-                          child: Text('روسي مكيف (95 ج.م)')),
-                    ],
-                    onChanged: (v) {
-                      if (v != null) {
-                        setSt(() {
-                          trainClass = v.toString();
-                          if (trainClass.contains('275')) {
-                            ticketPrice = 275.0;
-                          } else if (trainClass.contains('95')) {
-                            ticketPrice = 95.0;
-                          } else {
-                            ticketPrice = 185.0;
-                          }
-                        });
-                      }
-                    },
-                  ),
                   const Spacer(),
                   SizedBox(
                     width: double.infinity,
                     height: 50,
-                    child: ElevatedButton.icon(
+                    child: ElevatedButton(
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF006A4E),
                         foregroundColor: Colors.white,
@@ -2148,12 +2722,11 @@ class ServicesTab extends StatelessWidget {
                           context,
                           ticketPrice,
                           'تذكرة قطار ($fromStation ⬅️ $toStation)',
-                          trainClass,
+                          'درجة أولى مكيفة VIP',
                         );
                         if (ok && ctx.mounted) Navigator.pop(ctx);
                       },
-                      icon: const Icon(Icons.confirmation_number),
-                      label: Text('إصدار التذكرة فوراً ($ticketPrice ج.م)'),
+                      child: Text('حجز التذكرة الآن ($ticketPrice ج.م)'),
                     ),
                   ),
                 ],
@@ -2167,371 +2740,583 @@ class ServicesTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final servicesList = [
+    final realRestaurants = [
       {
-        'title': 'فواتير الكهرباء',
-        'sub': 'استعلام ودفع فوري',
-        'icon': Icons.electric_bolt,
-        'type': 'bill',
-        'label': 'رقم السداد الإلكتروني للعداد',
-      },
-      {
-        'title': 'شحن رصيد / باقات',
-        'sub': 'فودافون • أورانج • اتصالات • WE',
-        'icon': Icons.phone_android,
-        'type': 'bill',
-        'label': 'رقم الموبايل المراد شحنه',
-      },
-      {
-        'title': 'شحن شدات ببجي',
-        'sub': 'شحن مباشر بالـ ID',
-        'icon': Icons.sports_esports,
-        'type': 'pubg',
-        'label': '',
-      },
-      {
-        'title': 'جواهر فري فاير',
-        'sub': 'شحن مباشر بالـ ID',
-        'icon': Icons.videogame_asset,
-        'type': 'ff',
-        'label': '',
-      },
-      {
-        'title': 'قطارات مصر (تذكرتي)',
-        'sub': 'احجز تذكرتك الآن',
-        'icon': Icons.train,
-        'type': 'train',
-        'label': '',
-      },
-      {
-        'title': 'منصة مصر الرقمية',
-        'sub': 'الخدمات الحكومية',
-        'icon': Icons.account_balance,
-        'type': 'gov',
-        'label': '',
-      },
-    ];
-
-    final luxuryPlaces = [
-      {
-        'name': 'مطعم وكافيه كازبلانكا - الزمالك',
-        'cat': 'مطعم فاخر • إطلالة مباشرة على النيل',
+        'name': 'مطعم صبحي كابر (Sobhy Kaber)',
+        'cat': 'مشويات وطواجن مصرية أصيلة',
         'rating': '4.9',
-        'address': 'شارع أبو الفدا، الزمالك، القاهرة',
-        'hours': '10:00 صباحاً - 2:00 صباحاً',
-        'desc':
-            'تجربة طعام راقية على ضفاف النيل مباشرة مع قائمة أطباق عالمية وشرقية وجلسات VIP مخصصة لرجال الأعمال والعائلات.',
+        'address': '151 شارع عبيد، روض الفرج، شبرا، القاهرة',
+        'hours': '11:00 صباحاً - 3:00 صباحاً',
+        'website': 'https://www.facebook.com/SobhyKaberOfficial',
+        'image':
+            'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=800',
+      },
+      {
+        'name': 'مطعم قصر الكبابجي (Qasr El Kababgi)',
+        'cat': 'مشويات فاخرة وضيافة ملكية',
+        'rating': '4.8',
+        'address': 'التجمع الخامس / الشيخ زايد / مدينة نصر',
+        'hours': '12:00 ظهراً - 2:00 صباحاً',
+        'website': 'https://qasrelkababgi.com',
         'image':
             'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800',
       },
       {
-        'name': 'قصر المشويات الملكي - التجمع الخامس',
-        'cat': 'مشويات وطواجن فاخرة • قاعات VIP',
-        'rating': '4.8',
-        'address': 'شارع التسعين الشمالي، القاهرة الجديدة',
-        'hours': '12:00 ظهراً - 1:00 صباحاً',
-        'desc':
-            'أفخم المشويات المصرية واللحوم الفاخرة مع قاعات اجتماعات خاصة للشركات وضيافة ملكية متكاملة.',
+        'name': 'مطعم أبو شقرة (Abou Shakra)',
+        'cat': 'أشهر مطاعم المشويات في مصر منذ 1947',
+        'rating': '4.7',
+        'address': '69 شارع القصر العيني، جاردن سيتي، القاهرة',
+        'hours': '10:00 صباحاً - 2:00 صباحاً',
+        'website': 'https://aboushakragroup.com',
         'image':
-            'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=800',
+            'https://images.unsplash.com/photo-1544025162-d76694265947?w=800',
       },
     ];
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(isCorporate
-            ? 'بوابة الشركات VIP وخدمات EG MASR'
-            : 'خدمات EG MASR الفورية'),
-      ),
+      appBar: AppBar(title: const Text('خدمات وحجوزات EG MASR')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          if (isCorporate) ...[
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF004D38), Color(0xFF006A4E)],
-                ),
-                borderRadius: BorderRadius.circular(18),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Row(
-                    children: [
-                      Icon(Icons.workspace_premium,
-                          color: Color(0xFFD4AF37), size: 28),
-                      SizedBox(width: 8),
-                      Text(
-                        'حجوزات الشركات وكبار العملاء (VIP)',
-                        style: TextStyle(
-                            color: Color(0xFFD4AF37),
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFD4AF37),
-                            foregroundColor: Colors.black,
-                          ),
-                          onPressed: () => launchUrl(
-                              Uri.parse('https://www.egyptair.com'),
-                              mode: LaunchMode.externalApplication),
-                          icon: const Icon(Icons.flight_takeoff),
-                          label: const Text('حجز طيران ✈️'),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.white,
-                            foregroundColor: const Color(0xFF006A4E),
-                          ),
-                          onPressed: () => launchUrl(
-                              Uri.parse('https://www.booking.com'),
-                              mode: LaunchMode.externalApplication),
-                          icon: const Icon(Icons.hotel),
-                          label: const Text('حجز فنادق 🏨'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF003580),
+              borderRadius: BorderRadius.circular(18),
             ),
-            const SizedBox(height: 20),
-          ],
-          const Text('خدمات الدفع والشحن المباشر (فوري • ألعاب • تذكرتي)',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.hotel, color: Color(0xFFFEBB02), size: 28),
+                    SizedBox(width: 8),
+                    Text(
+                      'حجز الفنادق المباشر (EG MASR Booking)',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'اختر المدينة، تاريخ الوصول والمغادرة بالساعة، عدد الأفراد والأعمار واحجز غرفتك مباشرة من محفظتك.',
+                  style: TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFFEBB02),
+                      foregroundColor: Colors.black,
+                    ),
+                    onPressed: () => _openBookingStyleHotelScreen(context),
+                    icon: const Icon(Icons.search),
+                    label: const Text('بحث وحجز الفنادق الآن',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 18),
+          const Text('خدمات الدفع والشحن الفوري',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 12),
-          GridView.builder(
+          const SizedBox(height: 10),
+          GridView.count(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
-            itemCount: servicesList.length,
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
-              childAspectRatio: 1.5,
-              crossAxisSpacing: 10,
-              mainAxisSpacing: 10,
-            ),
-            itemBuilder: (_, i) {
-              final s = servicesList[i];
-              return Card(
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14)),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(14),
-                  onTap: () {
-                    final type = s['type'];
-                    if (type == 'bill') {
-                      _openInAppFawryBillScreen(context, s['title'] as String,
-                          s['label'] as String);
-                    } else if (type == 'pubg') {
-                      _openInAppGameTopupScreen(context, true);
-                    } else if (type == 'ff') {
-                      _openInAppGameTopupScreen(context, false);
-                    } else if (type == 'train') {
-                      _openInAppTrainBookingScreen(context);
-                    } else if (type == 'gov') {
-                      launchUrl(Uri.parse('https://digital.gov.eg'),
-                          mode: LaunchMode.externalApplication);
-                    }
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.all(10),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(s['icon'] as IconData,
-                            color: const Color(0xFF006A4E), size: 30),
-                        const SizedBox(height: 6),
-                        Text(
-                          s['title'] as String,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                              fontSize: 13, fontWeight: FontWeight.bold),
-                        ),
-                        Text(
-                          s['sub'] as String,
-                          textAlign: TextAlign.center,
-                          style:
-                              const TextStyle(fontSize: 10, color: Colors.grey),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            },
+            crossAxisCount: 2,
+            childAspectRatio: 1.6,
+            crossAxisSpacing: 10,
+            mainAxisSpacing: 10,
+            children: [
+              _serviceTile(Icons.electric_bolt, 'فواتير الكهرباء',
+                  () => _openInAppFawryBillScreen(context, 'فاتورة الكهرباء', 'رقم السداد الإلكتروني')),
+              _serviceTile(Icons.phone_android, 'شحن رصيد / باقات',
+                  () => _openInAppFawryBillScreen(context, 'شحن رصيد موبايل', 'رقم الموبايل')),
+              _serviceTile(Icons.sports_esports, 'شدات ببجي PUBG',
+                  () => _openInAppGameTopupScreen(context, true)),
+              _serviceTile(Icons.videogame_asset, 'جواهر فري فاير',
+                  () => _openInAppGameTopupScreen(context, false)),
+              _serviceTile(Icons.train, 'قطارات مصر',
+                  () => _openInAppTrainBookingScreen(context)),
+              _serviceTile(Icons.flight_takeoff, 'حجز طيران',
+                  () => launchUrl(Uri.parse('https://www.egyptair.com'), mode: LaunchMode.externalApplication)),
+            ],
           ),
-          const SizedBox(height: 24),
-          const Text('أفخم المطاعم والكافيهات (معاينة وحجز)',
-              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 22),
+          const Text('أشهر المطاعم الحقيقية في مصر (معاينة وحجز)',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
           const SizedBox(height: 10),
-          ...luxuryPlaces.map((place) => Card(
+          ...realRestaurants.map((place) => Card(
                 margin: const EdgeInsets.only(bottom: 14),
                 clipBehavior: Clip.antiAlias,
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(18)),
-                child: InkWell(
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => RestaurantDetailScreen(place: place),
-                      ),
-                    );
-                  },
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Image.network(
-                        place['image']!,
-                        height: 150,
-                        width: double.infinity,
-                        fit: BoxFit.cover,
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.all(14),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(place['name']!,
-                                      style: const TextStyle(
-                                          fontSize: 15,
-                                          fontWeight: FontWeight.bold)),
-                                  Text(
-                                      '${place['cat']} • ⭐ ${place['rating']}',
-                                      style: const TextStyle(
-                                          color: Colors.grey, fontSize: 12)),
-                                ],
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Image.network(place['image']!,
+                        height: 140, width: double.infinity, fit: BoxFit.cover),
+                    Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(place['name']!,
+                              style: const TextStyle(
+                                  fontSize: 16, fontWeight: FontWeight.bold)),
+                          Text('${place['cat']} • ⭐ ${place['rating']}',
+                              style: const TextStyle(
+                                  color: Colors.grey, fontSize: 12)),
+                          Text('📍 ${place['address']}',
+                              style: const TextStyle(fontSize: 12)),
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton.icon(
+                                  onPressed: () => launchUrl(
+                                      Uri.parse(place['website']!),
+                                      mode: LaunchMode.externalApplication),
+                                  icon: const Icon(Icons.public, size: 18),
+                                  label: const Text('معاينة الصفحة الرسمية'),
+                                ),
                               ),
-                            ),
-                            ElevatedButton(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF006A4E),
-                                foregroundColor: Colors.white,
-                              ),
-                              onPressed: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) =>
-                                        RestaurantDetailScreen(place: place),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF006A4E),
+                                    foregroundColor: Colors.white,
                                   ),
-                                );
-                              },
-                              child: const Text('معاينة وحجز'),
-                            ),
-                          ],
-                        ),
+                                  onPressed: () => _openRestaurantBookingForm(
+                                      context, place['name']!),
+                                  icon: const Icon(Icons.event_seat, size: 18),
+                                  label: const Text('حجز طاولة'),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               )),
         ],
       ),
     );
   }
+
+  Widget _serviceTile(IconData icon, String title, VoidCallback onTap) {
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: const Color(0xFF006A4E), size: 30),
+            const SizedBox(height: 6),
+            Text(title,
+                style:
+                    const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openRestaurantBookingForm(BuildContext context, String restName) {
+    final guestsCtrl = TextEditingController(text: '4');
+    DateTime selectedDate = DateTime.now().add(const Duration(days: 1));
+    TimeOfDay selectedTime = const TimeOfDay(hour: 20, minute: 30);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSt) => AlertDialog(
+          title: Text('حجز في $restName'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: guestsCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                    labelText: 'عدد الأفراد', prefixIcon: Icon(Icons.people)),
+              ),
+              const SizedBox(height: 10),
+              ListTile(
+                leading: const Icon(Icons.calendar_today),
+                title: Text(
+                    'التاريخ: ${selectedDate.year}-${selectedDate.month}-${selectedDate.day}'),
+                onTap: () async {
+                  final d = await showDatePicker(
+                    context: ctx,
+                    initialDate: selectedDate,
+                    firstDate: DateTime.now(),
+                    lastDate: DateTime.now().add(const Duration(days: 90)),
+                  );
+                  if (d != null) setSt(() => selectedDate = d);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.access_time),
+                title: Text('الساعة: ${selectedTime.format(ctx)}'),
+                onTap: () async {
+                  final t = await showTimePicker(
+                      context: ctx, initialTime: selectedTime);
+                  if (t != null) setSt(() => selectedTime = t);
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('إلغاء')),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF006A4E),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () {
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                        'تم تأكيد حجز $restName لعدد ${guestsCtrl.text} أفراد يوم ${selectedDate.day}/${selectedDate.month} الساعة ${selectedTime.format(context)} ✅'),
+                    backgroundColor: const Color(0xFF006A4E),
+                  ),
+                );
+              },
+              child: const Text('تأكيد الحجز'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
-class RestaurantDetailScreen extends StatefulWidget {
-  final Map place;
-  const RestaurantDetailScreen({super.key, required this.place});
+// ============================================================================
+// 7. BOOKING.COM REPLICA HOTEL SEARCH & DIRECT BOOKING ENGINE
+// ============================================================================
+class BookingHotelsScreen extends StatefulWidget {
+  final Future Function(String, String, double) onBookHotel;
+  const BookingHotelsScreen({super.key, required this.onBookHotel});
 
   @override
-  State createState() => _RestaurantDetailScreenState();
+  State createState() => _BookingHotelsScreenState();
 }
 
-class _RestaurantDetailScreenState extends State {
-  final _guestsCtrl = TextEditingController(text: '4');
-  final _timeCtrl = TextEditingController(text: '8:30 مساءً');
+class _BookingHotelsScreenState extends State {
+  String _city = 'القاهرة';
+  DateTime _checkInDate = DateTime.now().add(const Duration(days: 1));
+  TimeOfDay _checkInTime = const TimeOfDay(hour: 14, minute: 0);
+  DateTime _checkOutDate = DateTime.now().add(const Duration(days: 3));
+  TimeOfDay _checkOutTime = const TimeOfDay(hour: 12, minute: 0);
+  int _adults = 2;
+  int _children = 0;
+  final _agesCtrl = TextEditingController(text: '30, 28');
 
-  RestaurantDetailScreen get w => widget as RestaurantDetailScreen;
+  BookingHotelsScreen get w => widget as BookingHotelsScreen;
 
   @override
   Widget build(BuildContext context) {
-    final p = w.place;
+    final nights = _checkOutDate.difference(_checkInDate).inDays < 1
+        ? 1
+        : _checkOutDate.difference(_checkInDate).inDays;
+
+    final hotels = [
+      {
+        'name': 'فندق فيرمونت نايل سيتي (Fairmont Nile City)',
+        'city': 'القاهرة',
+        'rating': '9.2 استثنائي',
+        'stars': 5,
+        'pricePerNight': 4200.0,
+        'room': 'غرفة ديلوكس مطلة على النيل مباشرة + إفطار',
+        'image':
+            'https://images.unsplash.com/photo-1566073771259-6a8506099945?w=800',
+      },
+      {
+        'name': 'فندق فورسيزونز سان ستيفانو (Four Seasons)',
+        'city': 'الإسكندرية',
+        'rating': '9.4 ممتاز للغاية',
+        'stars': 5,
+        'pricePerNight': 5100.0,
+        'room': 'جناح سوبيريور مطل على البحر المتوسط',
+        'image':
+            'https://images.unsplash.com/photo-1582719478250-c89cae4dc85b?w=800',
+      },
+      {
+        'name': 'منتجع ريكسوس بريميوم سيجيت (Rixos Sharm)',
+        'city': 'شرم الشيخ',
+        'rating': '9.5 رائع',
+        'stars': 5,
+        'pricePerNight': 4800.0,
+        'room': 'غرفة فاخرة شاملة كلياً (Ultra All Inclusive)',
+        'image':
+            'https://images.unsplash.com/photo-1520250497591-112f2f40a3f4?w=800',
+      },
+    ];
+
     return Scaffold(
-      appBar: AppBar(title: Text(p['name'] ?? '')),
-      body: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Image.network(
-              p['image'] ?? '',
-              height: 220,
-              width: double.infinity,
-              fit: BoxFit.cover,
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF003580),
+        title: const Text('EG MASR Booking - الفنادق'),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(14),
+        children: [
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF003580),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: const Color(0xFFFEBB02), width: 3),
             ),
-            Padding(
-              padding: const EdgeInsets.all(18),
+            child: Column(
+              children: [
+                DropdownButtonFormField(
+                  value: _city,
+                  dropdownColor: Colors.white,
+                  decoration: const InputDecoration(
+                    filled: true,
+                    fillColor: Colors.white,
+                    prefixIcon: Icon(Icons.location_city),
+                    labelText: 'الوجهة / المدينة',
+                  ),
+                  items: ['القاهرة', 'الإسكندرية', 'شرم الشيخ', 'الغردقة', 'أسوان']
+                      .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) setState(() => _city = v.toString());
+                  },
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: InkWell(
+                        onTap: () async {
+                          final d = await showDatePicker(
+                            context: context,
+                            initialDate: _checkInDate,
+                            firstDate: DateTime.now(),
+                            lastDate:
+                                DateTime.now().add(const Duration(days: 365)),
+                          );
+                          if (d != null) {
+                            final t = await showTimePicker(
+                                context: context, initialTime: _checkInTime);
+                            setState(() {
+                              _checkInDate = d;
+                              if (t != null) _checkInTime = t;
+                            });
+                          }
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.all(10),
+                          color: Colors.white,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('تاريخ وساعة الوصول',
+                                  style: TextStyle(
+                                      fontSize: 11, color: Colors.grey)),
+                              Text(
+                                  '${_checkInDate.day}/${_checkInDate.month}/${_checkInDate.year} - ${_checkInTime.format(context)}',
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12)),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: InkWell(
+                        onTap: () async {
+                          final d = await showDatePicker(
+                            context: context,
+                            initialDate: _checkOutDate,
+                            firstDate: _checkInDate,
+                            lastDate:
+                                DateTime.now().add(const Duration(days: 365)),
+                          );
+                          if (d != null) {
+                            final t = await showTimePicker(
+                                context: context, initialTime: _checkOutTime);
+                            setState(() {
+                              _checkOutDate = d;
+                              if (t != null) _checkOutTime = t;
+                            });
+                          }
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.all(10),
+                          color: Colors.white,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('تاريخ وساعة المغادرة',
+                                  style: TextStyle(
+                                      fontSize: 11, color: Colors.grey)),
+                              Text(
+                                  '${_checkOutDate.day}/${_checkOutDate.month}/${_checkOutDate.year} - ${_checkOutTime.format(context)}',
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12)),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  color: Colors.white,
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text('البالغين: $_adults | الأطفال: $_children',
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.bold)),
+                          Row(
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.remove_circle_outline),
+                                onPressed: () {
+                                  if (_adults > 1) setState(() => _adults--);
+                                },
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.add_circle_outline),
+                                onPressed: () => setState(() => _adults++),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.child_care),
+                                onPressed: () => setState(() => _children++),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                      TextField(
+                        controller: _agesCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'أعمار النزلاء (مثال: 32, 29, 6)',
+                          isDense: true,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text('الفنادق المتاحة ($nights ليالي):',
+              style:
+                  const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 10),
+          ...hotels.map((h) {
+            final total = (h['pricePerNight'] as double) * nights;
+            return Card(
+              margin: const EdgeInsets.only(bottom: 14),
+              clipBehavior: Clip.antiAlias,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(p['name'] ?? '',
-                      style: const TextStyle(
-                          fontSize: 20, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 6),
-                  Text('📍 ${p['address']}'),
-                  Text('🕒 ${p['hours']}',
-                      style: const TextStyle(color: Colors.grey)),
-                  const SizedBox(height: 10),
-                  Text(p['desc'] ?? '', style: const TextStyle(height: 1.5)),
-                  const Divider(height: 28),
-                  const Text('نموذج الحجز',
-                      style:
-                          TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: _guestsCtrl,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: 'عدد الأفراد'),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: _timeCtrl,
-                    decoration: const InputDecoration(labelText: 'الموعد'),
-                  ),
-                  const SizedBox(height: 18),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF006A4E),
-                        foregroundColor: Colors.white,
-                      ),
-                      onPressed: () {
-                        Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                                'تم تأكيد الحجز في ${p['name']} لعدد ${_guestsCtrl.text} أفراد ✅'),
-                            backgroundColor: const Color(0xFF006A4E),
-                          ),
-                        );
-                      },
-                      child: const Text('تأكيد الحجز'),
+                  Image.network(h['image'] as String,
+                      height: 160, width: double.infinity, fit: BoxFit.cover),
+                  Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Expanded(
+                              child: Text(h['name'] as String,
+                                  style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                      color: Color(0xFF003580))),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF003580),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(h['rating'] as String,
+                                  style: const TextStyle(
+                                      color: Colors.white, fontSize: 11)),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(h['room'] as String,
+                            style: const TextStyle(fontSize: 13)),
+                        const Divider(),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('الإجمالي لـ $nights ليالي:',
+                                    style: const TextStyle(
+                                        fontSize: 11, color: Colors.grey)),
+                                Text('${total.toStringAsFixed(0)} ج.م',
+                                    style: const TextStyle(
+                                        fontSize: 20,
+                                        fontWeight: FontWeight.bold,
+                                        color: Color(0xFF006A4E))),
+                              ],
+                            ),
+                            ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF003580),
+                                foregroundColor: Colors.white,
+                              ),
+                              onPressed: () async {
+                                final details =
+                                    'وصول ${_checkInDate.day}/${_checkInDate.month} (${_checkInTime.format(context)}) - مغادرة ${_checkOutDate.day}/${_checkOutDate.month} | $_adults بالغين, $_children أطفال (أعمار: ${_agesCtrl.text})';
+                                final ok = await w.onBookHotel(
+                                    h['name'] as String, details, total);
+                                if (ok && mounted) Navigator.pop(context);
+                              },
+                              child: const Text('احجز الغرفة الآن'),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
                   ),
                 ],
               ),
-            ),
-          ],
-        ),
+            );
+          }),
+        ],
       ),
     );
   }
