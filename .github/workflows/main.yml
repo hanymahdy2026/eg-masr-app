@@ -36,10 +36,13 @@ jobs:
         with:
           flutter-version: '3.29.0'
           channel: 'stable'
-      - name: Prepare iOS Project
+      - name: Prepare iOS Project (iOS 13.0+)
         run: |
           flutter create . --platforms=ios
           flutter pub get
+          sed -i '' "s/# platform :ios, '12.0'/platform :ios, '13.0'/g" ios/Podfile
+          sed -i '' "s/platform :ios, '12.0'/platform :ios, '13.0'/g" ios/Podfile
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 12.0;/IPHONEOS_DEPLOYMENT_TARGET = 13.0;/g' ios/Runner.xcodeproj/project.pbxproj
       - name: Build iOS App (No Codesign)
         run: flutter build ios --release --no-codesign --no-tree-shake-icons
       - name: Package & Upload iOS IPA
