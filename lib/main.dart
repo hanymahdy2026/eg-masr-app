@@ -1956,3 +1956,124 @@ class ServicesTab extends StatelessWidget {
                                       '${place['cat']} • ⭐ ${place['rating']}',
                                       style: const TextStyle(
                                           color: Colors.grey, fontSize: 12)),
+                                ],
+                              ),
+                            ),
+                            ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF006A4E),
+                                foregroundColor: Colors.white,
+                              ),
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        RestaurantDetailScreen(place: place),
+                                  ),
+                                );
+                              },
+                              child: const Text('معاينة وحجز'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )),
+        ],
+      ),
+    );
+  }
+}
+
+class RestaurantDetailScreen extends StatefulWidget {
+  final Map place;
+  const RestaurantDetailScreen({super.key, required this.place});
+
+  @override
+  State createState() => _RestaurantDetailScreenState();
+}
+
+class _RestaurantDetailScreenState extends State {
+  final _guestsCtrl = TextEditingController(text: '4');
+  final _timeCtrl = TextEditingController(text: '8:30 مساءً');
+
+  RestaurantDetailScreen get w => widget as RestaurantDetailScreen;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = w.place;
+    return Scaffold(
+      appBar: AppBar(title: Text(p['name'] ?? '')),
+      body: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Image.network(
+              p['image'] ?? '',
+              height: 220,
+              width: double.infinity,
+              fit: BoxFit.cover,
+            ),
+            Padding(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(p['name'] ?? '',
+                      style: const TextStyle(
+                          fontSize: 20, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  Text('📍 ${p['address']}'),
+                  Text('🕒 ${p['hours']}',
+                      style: const TextStyle(color: Colors.grey)),
+                  const SizedBox(height: 10),
+                  Text(p['desc'] ?? '', style: const TextStyle(height: 1.5)),
+                  const Divider(height: 28),
+                  const Text('نموذج الحجز',
+                      style:
+                          TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: _guestsCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: 'عدد الأفراد'),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: _timeCtrl,
+                    decoration: const InputDecoration(labelText: 'الموعد'),
+                  ),
+                  const SizedBox(height: 18),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF006A4E),
+                        foregroundColor: Colors.white,
+                      ),
+                      onPressed: () {
+                        Navigator.pop(context);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                                'تم تأكيد الحجز في ${p['name']} لعدد ${_guestsCtrl.text} أفراد ✅'),
+                            backgroundColor: const Color(0xFF006A4E),
+                          ),
+                        );
+                      },
+                      child: const Text('تأكيد الحجز'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
