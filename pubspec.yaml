@@ -9,20 +9,20 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  cupertino_icons: any
-  supabase_flutter: any
-  qr_flutter: any
-  mobile_scanner: any
-  url_launcher: any
-  shared_preferences: any
-  flutter_contacts: any
-  image_picker: any
-  geolocator: any
+  cupertino_icons: ^1.0.8
+  supabase_flutter: ^2.8.4
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^6.0.6
+  url_launcher: ^6.3.1
+  shared_preferences: ^2.3.5
+  flutter_contacts: ^1.1.9+2
+  image_picker: ^1.1.2
+  geolocator: ^13.0.2
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: any
+  flutter_lints: ^5.0.0
 
 flutter:
   uses-material-design: true
