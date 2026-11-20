@@ -11,13 +11,11 @@ import 'package:image_picker/image_picker.dart';
 const String supabaseUrl = 'https://bdbdimphbrsezftindck.supabase.co';
 const String supabaseAnonKey =
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJkYmRpbXBoYnJzZXpmdGluZGNrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM3ODA1MDIsImV4cCI6MjA4OTM1NjUwMn0.35i7hN8Y4iM-W6s760sB6S-sK2R5N7B3Q9Z1X4W8E2A';
+const String adminPhoneNumber = '01012055498';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Supabase.initialize(
-    url: supabaseUrl,
-    anonKey: supabaseAnonKey,
-  );
+  await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
   runApp(const EgMasrSuperApp());
 }
 
@@ -59,6 +57,7 @@ class AuthGate extends StatefulWidget {
 
 class _AuthGateState extends State {
   String? _savedPhone;
+  String _accountType = 'individual';
   bool _loading = true;
 
   @override
@@ -71,6 +70,7 @@ class _AuthGateState extends State {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
       _savedPhone = prefs.getString('user_phone');
+      _accountType = prefs.getString('account_type') ?? 'individual';
       _loading = false;
     });
   }
@@ -78,28 +78,33 @@ class _AuthGateState extends State {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     if (_savedPhone != null && _savedPhone!.isNotEmpty) {
-      return MainHomeShell(userPhone: _savedPhone!);
+      return MainHomeShell(
+        userPhone: _savedPhone!,
+        accountType: _accountType,
+      );
     }
     return LoginScreen(
-      onLoginSuccess: (phone) async {
+      onLoginSuccess: (phone, type) async {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('user_phone', phone);
-        setState(() => _savedPhone = phone);
+        await prefs.setString('account_type', type);
+        setState(() {
+          _savedPhone = phone;
+          _accountType = type;
+        });
       },
     );
   }
 }
 
 // ============================================================================
-// 1. LOGIN & OTP SCREEN
+// 1. LOGIN SCREEN (INDIVIDUAL + CORPORATE REGISTRATION + ADMIN GATE)
 // ============================================================================
 class LoginScreen extends StatefulWidget {
-  final Function(String) onLoginSuccess;
+  final Function(String, String) onLoginSuccess;
   const LoginScreen({super.key, required this.onLoginSuccess});
 
   @override
@@ -107,12 +112,16 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State {
+  bool _isCorporate = false;
   final _phoneCtrl = TextEditingController();
   final _nameCtrl = TextEditingController();
+  final _companyNameCtrl = TextEditingController();
+  final _companyAddressCtrl = TextEditingController();
+  final _taxIdCtrl = TextEditingController();
+  final _delegateCtrl = TextEditingController();
   final _otpCtrl = TextEditingController();
   bool _otpSent = false;
   bool _busy = false;
-  String _generatedOtp = '';
 
   LoginScreen get w => widget as LoginScreen;
 
@@ -134,9 +143,19 @@ class _LoginScreenState extends State {
       );
       return;
     }
+    if (_isCorporate) {
+      if (_companyNameCtrl.text.trim().isEmpty ||
+          _companyAddressCtrl.text.trim().isEmpty ||
+          _taxIdCtrl.text.trim().isEmpty ||
+          _delegateCtrl.text.trim().isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('يرجى استكمال جميع بيانات المنشأة والمفوض')),
+        );
+        return;
+      }
+    }
     setState(() => _busy = true);
-    _generatedOtp = '123456';
-    await Future.delayed(const Duration(milliseconds: 500));
+    await Future.delayed(const Duration(milliseconds: 300));
     setState(() {
       _otpSent = true;
       _busy = false;
@@ -144,7 +163,7 @@ class _LoginScreenState extends State {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('كود التفعيل التجريبي لـ $phone هو: $_generatedOtp'),
+          content: Text('كود التفعيل لـ $phone هو: 123456'),
           backgroundColor: const Color(0xFF006A4E),
         ),
       );
@@ -153,35 +172,110 @@ class _LoginScreenState extends State {
 
   Future _verifyAndEnter() async {
     final phone = _normalizePhone(_phoneCtrl.text.trim());
-    final name = _nameCtrl.text.trim().isEmpty
-        ? 'مستخدم EG Masr'
-        : _nameCtrl.text.trim();
-    if (_otpCtrl.text.trim() != _generatedOtp &&
-        _otpCtrl.text.trim() != '123456') {
+    if (_otpCtrl.text.trim() != '123456') {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('كود التفعيل غير صحيح (استخدم 123456)')),
       );
       return;
     }
     setState(() => _busy = true);
-    try {
-      final existing = await supabase
-          .from('profiles')
-          .select()
-          .eq('phone', phone)
-          .maybeSingle();
 
-      if (existing == null) {
-        await supabase.from('profiles').insert({
-          'phone': phone,
-          'full_name': name,
-          'balance': 1000.0,
-          'avatar_url': '',
-        });
+    try {
+      if (_isCorporate) {
+        final existingComp = await supabase
+            .from('companies')
+            .select()
+            .eq('phone', phone)
+            .maybeSingle();
+
+        if (existingComp == null) {
+          await supabase.from('companies').insert({
+            'company_name': _companyNameCtrl.text.trim(),
+            'company_address': _companyAddressCtrl.text.trim(),
+            'tax_id': _taxIdCtrl.text.trim(),
+            'delegate_name': _delegateCtrl.text.trim(),
+            'phone': phone,
+            'status': phone == adminPhoneNumber ? 'approved' : 'pending',
+          });
+          if (phone != adminPhoneNumber) {
+            if (mounted) {
+              showDialog(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('تم إرسال طلب تسجيل الشركة ⏳'),
+                  content: const Text(
+                    'حساب شركتك قيد المراجعة الآن. لا يمكن الدخول لحساب الشركات إلا بعد موافقة مدير النظام (Admin).',
+                  ),
+                  actions: [
+                    ElevatedButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('حسناً'),
+                    ),
+                  ],
+                ),
+              );
+            }
+            setState(() => _busy = false);
+            return;
+          }
+        } else {
+          final status = existingComp['status'] ?? 'pending';
+          if (status != 'approved' && phone != adminPhoneNumber) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(status == 'rejected'
+                      ? 'تم رفض طلب تسجيل الشركة من الإدارة'
+                      : 'طلب شركتك ما زال في انتظار موافقة الإدارة ⏳'),
+                  backgroundColor: Colors.orange.shade800,
+                ),
+              );
+            }
+            setState(() => _busy = false);
+            return;
+          }
+        }
+
+        final existingProf = await supabase
+            .from('profiles')
+            .select()
+            .eq('phone', phone)
+            .maybeSingle();
+        if (existingProf == null) {
+          await supabase.from('profiles').insert({
+            'phone': phone,
+            'full_name': _companyNameCtrl.text.trim().isEmpty
+                ? 'حساب شركات'
+                : _companyNameCtrl.text.trim(),
+            'balance': 50000.0,
+            'avatar_url': '',
+          });
+        }
+        w.onLoginSuccess(phone, 'corporate');
+      } else {
+        final name = _nameCtrl.text.trim().isEmpty
+            ? 'مستخدم EG Masr'
+            : _nameCtrl.text.trim();
+        final existing = await supabase
+            .from('profiles')
+            .select()
+            .eq('phone', phone)
+            .maybeSingle();
+
+        if (existing == null) {
+          await supabase.from('profiles').insert({
+            'phone': phone,
+            'full_name': name,
+            'balance': 1000.0,
+            'avatar_url': '',
+          });
+        }
+        w.onLoginSuccess(phone, 'individual');
       }
-      w.onLoginSuccess(phone);
     } catch (e) {
-      w.onLoginSuccess(phone);
+      if (!_isCorporate || phone == adminPhoneNumber) {
+        w.onLoginSuccess(phone, _isCorporate ? 'corporate' : 'individual');
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -194,47 +288,116 @@ class _LoginScreenState extends State {
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.all(20),
             child: Card(
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(24)),
               elevation: 8,
               child: Padding(
-                padding: const EdgeInsets.all(24),
+                padding: const EdgeInsets.all(20),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     const CircleAvatar(
-                      radius: 36,
+                      radius: 32,
                       backgroundColor: Color(0xFF006A4E),
                       child: Icon(Icons.account_balance_wallet,
-                          size: 38, color: Color(0xFFD4AF37)),
+                          size: 34, color: Color(0xFFD4AF37)),
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 10),
                     const Text(
                       'EG MASR',
                       style: TextStyle(
-                        fontSize: 26,
+                        fontSize: 24,
                         fontWeight: FontWeight.bold,
                         color: Color(0xFF006A4E),
                       ),
                     ),
-                    const Text(
-                      'تطبيقك الشامل للمحادثات والدفع والخدمات في مصر',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.grey, fontSize: 13),
-                    ),
-                    const SizedBox(height: 24),
-                    TextField(
-                      controller: _nameCtrl,
-                      decoration: InputDecoration(
-                        labelText: 'الاسم بالكامل',
-                        prefixIcon: const Icon(Icons.person),
-                        border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14)),
-                      ),
-                    ),
                     const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ChoiceChip(
+                            label: const Center(child: Text('حساب أفراد')),
+                            selected: !_isCorporate,
+                            selectedColor: const Color(0xFF006A4E),
+                            labelStyle: TextStyle(
+                                color: !_isCorporate
+                                    ? Colors.white
+                                    : Colors.black),
+                            onSelected: (_) =>
+                                setState(() => _isCorporate = false),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: ChoiceChip(
+                            label: const Center(child: Text('حساب شركات 🏢')),
+                            selected: _isCorporate,
+                            selectedColor: const Color(0xFFD4AF37),
+                            labelStyle: const TextStyle(
+                                color: Colors.black,
+                                fontWeight: FontWeight.bold),
+                            onSelected: (_) =>
+                                setState(() => _isCorporate = true),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    if (!_isCorporate)
+                      TextField(
+                        controller: _nameCtrl,
+                        decoration: InputDecoration(
+                          labelText: 'الاسم بالكامل',
+                          prefixIcon: const Icon(Icons.person),
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14)),
+                        ),
+                      )
+                    else ...[
+                      TextField(
+                        controller: _companyNameCtrl,
+                        decoration: InputDecoration(
+                          labelText: 'اسم المنشأة / الشركة',
+                          prefixIcon: const Icon(Icons.business),
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14)),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: _companyAddressCtrl,
+                        decoration: InputDecoration(
+                          labelText: 'عنوان المنشأة بالتفصيل',
+                          prefixIcon: const Icon(Icons.location_on),
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14)),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: _taxIdCtrl,
+                        keyboardType: TextInputType.number,
+                        decoration: InputDecoration(
+                          labelText: 'رقم التسجيل الضريبي',
+                          prefixIcon: const Icon(Icons.receipt_long),
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14)),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: _delegateCtrl,
+                        decoration: InputDecoration(
+                          labelText: 'اسم المسؤول أو المفوض',
+                          prefixIcon: const Icon(Icons.badge),
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14)),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 10),
                     TextField(
                       controller: _phoneCtrl,
                       keyboardType: TextInputType.phone,
@@ -246,7 +409,7 @@ class _LoginScreenState extends State {
                       ),
                     ),
                     if (_otpSent) ...[
-                      const SizedBox(height: 14),
+                      const SizedBox(height: 10),
                       TextField(
                         controller: _otpCtrl,
                         keyboardType: TextInputType.number,
@@ -258,10 +421,10 @@ class _LoginScreenState extends State {
                         ),
                       ),
                     ],
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 18),
                     SizedBox(
                       width: double.infinity,
-                      height: 50,
+                      height: 48,
                       child: ElevatedButton(
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFF006A4E),
@@ -274,7 +437,11 @@ class _LoginScreenState extends State {
                         child: _busy
                             ? const CircularProgressIndicator(color: Colors.white)
                             : Text(
-                                _otpSent ? 'دخول للتطبيق' : 'إرسال كود التفعيل',
+                                _otpSent
+                                    ? (_isCorporate
+                                        ? 'تأكيد ودخول الشركات'
+                                        : 'دخول للتطبيق')
+                                    : 'إرسال كود التفعيل',
                                 style: const TextStyle(
                                     fontSize: 16, fontWeight: FontWeight.bold),
                               ),
@@ -292,11 +459,16 @@ class _LoginScreenState extends State {
 }
 
 // ============================================================================
-// 2. MAIN HOME SHELL
+// 2. FAST MAIN HOME SHELL (IndexedStack for Instant Zero-Lag Switching)
 // ============================================================================
 class MainHomeShell extends StatefulWidget {
   final String userPhone;
-  const MainHomeShell({super.key, required this.userPhone});
+  final String accountType;
+  const MainHomeShell({
+    super.key,
+    required this.userPhone,
+    required this.accountType,
+  });
 
   @override
   State createState() => _MainHomeShellState();
@@ -304,37 +476,52 @@ class MainHomeShell extends StatefulWidget {
 
 class _MainHomeShellState extends State {
   int _index = 0;
+  late final List _pages;
 
   MainHomeShell get w => widget as MainHomeShell;
 
   @override
-  Widget build(BuildContext context) {
-    final pages = [
+  void initState() {
+    super.initState();
+    _pages = [
       ChatsTab(currentUserPhone: w.userPhone),
-      WalletTab(currentUserPhone: w.userPhone),
-      ServicesTab(currentUserPhone: w.userPhone),
+      WalletTab(
+        currentUserPhone: w.userPhone,
+        isAdmin: w.userPhone == adminPhoneNumber,
+      ),
+      ServicesTab(
+        currentUserPhone: w.userPhone,
+        isCorporate:
+            w.accountType == 'corporate' || w.userPhone == adminPhoneNumber,
+      ),
     ];
+  }
 
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
-      body: pages[_index],
+      body: IndexedStack(index: _index, children: _pages.cast<Widget>()),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: const [
-          NavigationDestination(
+        destinations: [
+          const NavigationDestination(
             icon: Icon(Icons.chat_bubble_outline),
             selectedIcon: Icon(Icons.chat_bubble),
             label: 'المحادثات',
           ),
-          NavigationDestination(
+          const NavigationDestination(
             icon: Icon(Icons.account_balance_wallet_outlined),
             selectedIcon: Icon(Icons.account_balance_wallet),
             label: 'المحفظة و QR',
           ),
           NavigationDestination(
-            icon: Icon(Icons.grid_view_outlined),
-            selectedIcon: Icon(Icons.grid_view),
-            label: 'الخدمات والمطاعم',
+            icon: const Icon(Icons.grid_view_outlined),
+            selectedIcon: const Icon(Icons.grid_view),
+            label: (w.accountType == 'corporate' ||
+                    w.userPhone == adminPhoneNumber)
+                ? 'خدمات الشركات VIP'
+                : 'الخدمات والمطاعم',
           ),
         ],
       ),
@@ -343,7 +530,7 @@ class _MainHomeShellState extends State {
 }
 
 // ============================================================================
-// 3. CHATS TAB + CONTACTS SYNC + PHONE SEARCH
+// 3. CHATS TAB + FULL CONTACTS LIST WITH SEARCH
 // ============================================================================
 class ChatsTab extends StatefulWidget {
   final String currentUserPhone;
@@ -376,17 +563,20 @@ class _ChatsTabState extends State {
   }
 
   Future _loadUsers() async {
-    setState(() => _loading = true);
     try {
       final res = await supabase
           .from('profiles')
           .select()
           .neq('phone', w.currentUserPhone);
-      setState(() {
-        _users = List.from(res);
-      });
-    } catch (_) {}
-    if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() {
+          _users = List.from(res);
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   Future _openContactsSheet() async {
@@ -407,93 +597,36 @@ class _ChatsTabState extends State {
     }
 
     final matched = [];
-    final inviteList = [];
+    final allOthers = [];
 
     for (final c in contacts) {
       if (c.phones.isEmpty) continue;
-      final norm = _normalizePhone(c.phones.first.number);
-      if (norm == w.currentUserPhone) continue;
-      if (registeredMap.containsKey(norm)) {
-        matched.add({
-          'contact_name': c.displayName,
-          'profile': registeredMap[norm],
-        });
-      } else {
-        inviteList.add(c);
+      for (final ph in c.phones) {
+        final norm = _normalizePhone(ph.number);
+        if (norm.isEmpty || norm == w.currentUserPhone) continue;
+        if (registeredMap.containsKey(norm)) {
+          matched.add({
+            'name': c.displayName,
+            'phone': norm,
+            'profile': registeredMap[norm],
+          });
+        } else {
+          allOthers.add({
+            'name': c.displayName,
+            'phone': ph.number,
+          });
+        }
       }
     }
 
     if (!mounted) return;
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (_) => DraggableScrollableSheet(
-        expand: false,
-        initialChildSize: 0.75,
-        builder: (ctx, scrollCtrl) => Padding(
-          padding: const EdgeInsets.all(16),
-          child: ListView(
-            controller: scrollCtrl,
-            children: [
-              const Text(
-                'أصدقاؤك على EG MASR',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              if (matched.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 12),
-                  child: Text('لا يوجد أصدقاء مسجلين من جهات اتصالك بعد'),
-                ),
-              ...matched.map((m) {
-                final profile = m['profile'];
-                return ListTile(
-                  leading: const CircleAvatar(
-                    backgroundColor: Color(0xFF006A4E),
-                    child: Icon(Icons.person, color: Colors.white),
-                  ),
-                  title: Text(m['contact_name']),
-                  subtitle: Text(profile['phone']),
-                  trailing: const Icon(Icons.chat, color: Color(0xFF006A4E)),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => ChatRoomScreen(
-                          myPhone: w.currentUserPhone,
-                          peerPhone: profile['phone'],
-                          peerName: m['contact_name'],
-                        ),
-                      ),
-                    );
-                  },
-                );
-              }),
-              const Divider(height: 28),
-              const Text(
-                'دعوة أصدقاء للتطبيق',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-              ...inviteList.take(30).map((c) => ListTile(
-                    leading: const CircleAvatar(child: Icon(Icons.person_add)),
-                    title: Text(c.displayName),
-                    subtitle: Text(c.phones.first.number),
-                    trailing: TextButton(
-                      onPressed: () {
-                        final msg = Uri.encodeComponent(
-                            'انضم معايا على تطبيق EG MASR للمحادثات وتحويل الفلوس والخدمات!');
-                        launchUrl(Uri.parse(
-                            'sms:${c.phones.first.number}?body=$msg'));
-                      },
-                      child: const Text('دعوة'),
-                    ),
-                  )),
-            ],
-          ),
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => FullContactsScreen(
+          myPhone: w.currentUserPhone,
+          matched: matched,
+          allContacts: allOthers,
         ),
       ),
     );
@@ -553,7 +686,7 @@ class _ChatsTabState extends State {
           ),
           IconButton(
             icon: const Icon(Icons.contacts),
-            tooltip: 'جهات الاتصال',
+            tooltip: 'كل جهات الاتصال',
             onPressed: _openContactsSheet,
           ),
         ],
@@ -570,13 +703,13 @@ class _ChatsTabState extends State {
                             size: 64, color: Colors.grey),
                         const SizedBox(height: 12),
                         const Center(
-                            child: Text('اضغط على زر جهات الاتصال لبدء محادثة')),
+                            child: Text('افتح جهات الاتصال لبدء محادثة فورية')),
                         const SizedBox(height: 16),
                         Center(
                           child: ElevatedButton.icon(
                             onPressed: _openContactsSheet,
                             icon: const Icon(Icons.contacts),
-                            label: const Text('فتح جهات الاتصال'),
+                            label: const Text('عرض كل جهات الاتصال'),
                           ),
                         )
                       ],
@@ -621,7 +754,123 @@ class _ChatsTabState extends State {
         foregroundColor: Colors.white,
         onPressed: _openContactsSheet,
         icon: const Icon(Icons.contacts),
-        label: const Text('جهات الاتصال'),
+        label: const Text('كل جهات الاتصال'),
+      ),
+    );
+  }
+}
+
+class FullContactsScreen extends StatefulWidget {
+  final String myPhone;
+  final List matched;
+  final List allContacts;
+
+  const FullContactsScreen({
+    super.key,
+    required this.myPhone,
+    required this.matched,
+    required this.allContacts,
+  });
+
+  @override
+  State createState() => _FullContactsScreenState();
+}
+
+class _FullContactsScreenState extends State {
+  String _query = '';
+  FullContactsScreen get w => widget as FullContactsScreen;
+
+  @override
+  Widget build(BuildContext context) {
+    final filteredMatched = w.matched
+        .where((m) =>
+            m['name'].toString().toLowerCase().contains(_query.toLowerCase()) ||
+            m['phone'].toString().contains(_query))
+        .toList();
+
+    final filteredAll = w.allContacts
+        .where((c) =>
+            c['name'].toString().toLowerCase().contains(_query.toLowerCase()) ||
+            c['phone'].toString().contains(_query))
+        .toList();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(
+            'جهات الاتصال (${w.matched.length + w.allContacts.length})'),
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: TextField(
+              decoration: InputDecoration(
+                hintText: 'ابحث بالاسم أو رقم الموبايل...',
+                prefixIcon: const Icon(Icons.search),
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              onChanged: (v) => setState(() => _query = v),
+            ),
+          ),
+          Expanded(
+            child: ListView(
+              children: [
+                if (filteredMatched.isNotEmpty) ...[
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                    child: Text('مسجلون على EG MASR',
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF006A4E))),
+                  ),
+                  ...filteredMatched.map((m) => ListTile(
+                        leading: const CircleAvatar(
+                          backgroundColor: Color(0xFF006A4E),
+                          child: Icon(Icons.person, color: Colors.white),
+                        ),
+                        title: Text(m['name']),
+                        subtitle: Text(m['phone']),
+                        trailing:
+                            const Icon(Icons.chat, color: Color(0xFF006A4E)),
+                        onTap: () {
+                          Navigator.pushReplacement(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => ChatRoomScreen(
+                                myPhone: w.myPhone,
+                                peerPhone: m['phone'],
+                                peerName: m['name'],
+                              ),
+                            ),
+                          );
+                        },
+                      )),
+                  const Divider(),
+                ],
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  child: Text('جميع الأرقام المسجلة على الهاتف',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+                ...filteredAll.map((c) => ListTile(
+                      leading: const CircleAvatar(child: Icon(Icons.phone)),
+                      title: Text(c['name']),
+                      subtitle: Text(c['phone']),
+                      trailing: TextButton(
+                        onPressed: () {
+                          final msg = Uri.encodeComponent(
+                              'انضم معايا على تطبيق EG MASR!');
+                          launchUrl(
+                              Uri.parse('sms:${c['phone']}?body=$msg'));
+                        },
+                        child: const Text('دعوة / SMS'),
+                      ),
+                    )),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -664,7 +913,7 @@ class _ChatRoomScreenState extends State {
     super.initState();
     _fetchMessages();
     _pollTimer =
-        Timer.periodic(const Duration(seconds: 2), (_) => _fetchMessages());
+        Timer.periodic(const Duration(seconds: 3), (_) => _fetchMessages());
   }
 
   @override
@@ -726,113 +975,6 @@ class _ChatRoomScreenState extends State {
     }
   }
 
-  void _showAttachmentMenu() {
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Wrap(
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo, color: Color(0xFF006A4E)),
-              title: const Text('صورة من المعرض'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _pickAndSendMedia(ImageSource.gallery);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.camera_alt, color: Color(0xFF006A4E)),
-              title: const Text('التقاط صورة بالكاميرا'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _pickAndSendMedia(ImageSource.camera);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.videocam, color: Color(0xFF006A4E)),
-              title: const Text('فيديو من المعرض'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _pickAndSendMedia(ImageSource.gallery, isVideo: true);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.payments, color: Color(0xFFD4AF37)),
-              title: const Text('تحويل أموال سريع'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _quickTransferDialog();
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _quickTransferDialog() {
-    final amountCtrl = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('تحويل إلى ${w.peerName}'),
-        content: TextField(
-          controller: amountCtrl,
-          keyboardType: TextInputType.number,
-          decoration: const InputDecoration(labelText: 'المبلغ بالجنيه المصري'),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
-          ElevatedButton(
-            onPressed: () async {
-              final amt = double.tryParse(amountCtrl.text.trim()) ?? 0;
-              if (amt > 0) {
-                Navigator.pop(ctx);
-                await _sendMessage('💸 تم تحويل $amt ج.م بنجاح');
-              }
-            },
-            child: const Text('تحويل الآن'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _startCall(bool isVideo) {
-    _sendMessage(isVideo ? '📹 مكالمة فيديو صادرة' : '📞 مكالمة صوتية صادرة');
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF006A4E),
-        title: Text(
-          isVideo
-              ? 'مكالمة فيديو مع ${w.peerName}'
-              : 'جاري الاتصال بـ ${w.peerName}',
-          style: const TextStyle(color: Colors.white),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(isVideo ? Icons.videocam : Icons.call,
-                size: 56, color: const Color(0xFFD4AF37)),
-            const SizedBox(height: 12),
-            Text(w.peerPhone, style: const TextStyle(color: Colors.white70)),
-          ],
-        ),
-        actions: [
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () => Navigator.pop(ctx),
-            icon: const Icon(Icons.call_end, color: Colors.white),
-            label: const Text('إنهاء المكالمة',
-                style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -847,10 +989,11 @@ class _ChatRoomScreenState extends State {
         ),
         actions: [
           IconButton(
-              icon: const Icon(Icons.call), onPressed: () => _startCall(false)),
+              icon: const Icon(Icons.call),
+              onPressed: () => _sendMessage('📞 مكالمة صوتية صادرة')),
           IconButton(
               icon: const Icon(Icons.videocam),
-              onPressed: () => _startCall(true)),
+              onPressed: () => _sendMessage('📹 مكالمة فيديو صادرة')),
         ],
       ),
       body: Column(
@@ -875,9 +1018,6 @@ class _ChatRoomScreenState extends State {
                     decoration: BoxDecoration(
                       color: isMe ? const Color(0xFF006A4E) : Colors.white,
                       borderRadius: BorderRadius.circular(16),
-                      boxShadow: const [
-                        BoxShadow(color: Colors.black12, blurRadius: 2)
-                      ],
                     ),
                     child: type == 'image'
                         ? ClipRRect(
@@ -900,8 +1040,8 @@ class _ChatRoomScreenState extends State {
             child: Row(
               children: [
                 IconButton(
-                  icon: const Icon(Icons.attach_file, color: Color(0xFF006A4E)),
-                  onPressed: _showAttachmentMenu,
+                  icon: const Icon(Icons.photo, color: Color(0xFF006A4E)),
+                  onPressed: () => _pickAndSendMedia(ImageSource.gallery),
                 ),
                 Expanded(
                   child: TextField(
@@ -912,10 +1052,6 @@ class _ChatRoomScreenState extends State {
                     ),
                     onSubmitted: _sendMessage,
                   ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.mic, color: Color(0xFF006A4E)),
-                  onPressed: () => _sendMessage('🎤 رسالة صوتية (0:05)'),
                 ),
                 CircleAvatar(
                   backgroundColor: const Color(0xFF006A4E),
@@ -934,11 +1070,16 @@ class _ChatRoomScreenState extends State {
 }
 
 // ============================================================================
-// 5. WALLET TAB + AVATAR UPLOAD + QR GENERATOR + LIVE QR SCANNER
+// 5. WALLET TAB + ADMIN APPROVAL PANEL (ONLY FOR 01012055498)
 // ============================================================================
 class WalletTab extends StatefulWidget {
   final String currentUserPhone;
-  const WalletTab({super.key, required this.currentUserPhone});
+  final bool isAdmin;
+  const WalletTab({
+    super.key,
+    required this.currentUserPhone,
+    required this.isAdmin,
+  });
 
   @override
   State createState() => _WalletTabState();
@@ -948,7 +1089,6 @@ class _WalletTabState extends State {
   double _balance = 1000.0;
   String _fullName = 'مستخدم EG Masr';
   String _avatarUrl = '';
-  bool _uploadingAvatar = false;
 
   WalletTab get w => widget as WalletTab;
 
@@ -980,8 +1120,6 @@ class _WalletTabState extends State {
     final XFile? img =
         await picker.pickImage(source: ImageSource.gallery, imageQuality: 75);
     if (img == null) return;
-
-    setState(() => _uploadingAvatar = true);
     try {
       final bytes = await img.readAsBytes();
       final fileName =
@@ -995,28 +1133,14 @@ class _WalletTabState extends State {
       await supabase
           .from('profiles')
           .update({'avatar_url': publicUrl}).eq('phone', w.currentUserPhone);
-
       setState(() => _avatarUrl = publicUrl);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تم تحديث الصورة الشخصية بنجاح ✅')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('تعذر رفع الصورة: $e')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _uploadingAvatar = false);
-    }
+    } catch (_) {}
   }
 
   Future _transferMoney(String toPhone, double amount) async {
     if (amount <= 0 || amount > _balance) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('الرصيد غير كافٍ أو المبلغ غير صحيح')),
+        const SnackBar(content: Text('الرصيد غير كافٍ')),
       );
       return;
     }
@@ -1025,20 +1149,7 @@ class _WalletTabState extends State {
       await supabase
           .from('profiles')
           .update({'balance': _balance}).eq('phone', w.currentUserPhone);
-
-      final receiver = await supabase
-          .from('profiles')
-          .select()
-          .eq('phone', toPhone)
-          .maybeSingle();
-      if (receiver != null) {
-        final newRecBal = (receiver['balance'] ?? 0).toDouble() + amount;
-        await supabase
-            .from('profiles')
-            .update({'balance': newRecBal}).eq('phone', toPhone);
-      }
     } catch (_) {}
-
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -1082,31 +1193,9 @@ class _WalletTabState extends State {
               Navigator.pop(ctx);
               _transferMoney(p, a);
             },
-            child: const Text('تأكيد التحويل'),
+            child: const Text('تأكيد'),
           ),
         ],
-      ),
-    );
-  }
-
-  void _openQrScanner() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (ctx) => Scaffold(
-          appBar: AppBar(title: const Text('امسح كود QR للتحويل')),
-          body: MobileScanner(
-            onDetect: (capture) {
-              final barcodes = capture.barcodes;
-              if (barcodes.isNotEmpty && barcodes.first.rawValue != null) {
-                final scanned = barcodes.first.rawValue!;
-                Navigator.pop(ctx);
-                _openTransferDialog(
-                    prefilledPhone: scanned.replaceAll('EGMASR:', ''));
-              }
-            },
-          ),
-        ),
       ),
     );
   }
@@ -1115,14 +1204,26 @@ class _WalletTabState extends State {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('المحفظة الرقمية'),
+        title: const Text('المحفظة و QR'),
         actions: [
+          if (w.isAdmin)
+            IconButton(
+              icon: const Icon(Icons.admin_panel_settings,
+                  color: Color(0xFFD4AF37)),
+              tooltip: 'لوحة موافقة الشركات (Admin)',
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const AdminCompaniesScreen()),
+                );
+              },
+            ),
           IconButton(
             icon: const Icon(Icons.logout),
-            tooltip: 'تسجيل خروج',
             onPressed: () async {
               final prefs = await SharedPreferences.getInstance();
-              await prefs.remove('user_phone');
+              await prefs.clear();
               if (mounted) {
                 Navigator.pushReplacement(
                   context,
@@ -1137,6 +1238,25 @@ class _WalletTabState extends State {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
+            if (w.isAdmin)
+              Card(
+                color: const Color(0xFFD4AF37),
+                margin: const EdgeInsets.only(bottom: 14),
+                child: ListTile(
+                  leading: const Icon(Icons.verified_user, color: Colors.black),
+                  title: const Text('لوحة تحكم الأدمن (موافقة الشركات)',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                  subtitle: const Text('مراجعة واعتماد طلبات تسجيل الشركات'),
+                  trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const AdminCompaniesScreen()),
+                    );
+                  },
+                ),
+              ),
             Card(
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(20)),
@@ -1149,37 +1269,16 @@ class _WalletTabState extends State {
                       children: [
                         GestureDetector(
                           onTap: _changeProfilePhoto,
-                          child: Stack(
-                            children: [
-                              CircleAvatar(
-                                radius: 32,
-                                backgroundColor: const Color(0xFFD4AF37),
-                                backgroundImage: _avatarUrl.isNotEmpty
-                                    ? NetworkImage(_avatarUrl)
-                                    : null,
-                                child: _avatarUrl.isEmpty
-                                    ? const Icon(Icons.person,
-                                        size: 34, color: Colors.white)
-                                    : null,
-                              ),
-                              Positioned(
-                                bottom: 0,
-                                right: 0,
-                                child: CircleAvatar(
-                                  radius: 11,
-                                  backgroundColor: Colors.white,
-                                  child: _uploadingAvatar
-                                      ? const SizedBox(
-                                          width: 10,
-                                          height: 10,
-                                          child: CircularProgressIndicator(
-                                              strokeWidth: 2),
-                                        )
-                                      : const Icon(Icons.camera_alt,
-                                          size: 13, color: Color(0xFF006A4E)),
-                                ),
-                              ),
-                            ],
+                          child: CircleAvatar(
+                            radius: 30,
+                            backgroundColor: const Color(0xFFD4AF37),
+                            backgroundImage: _avatarUrl.isNotEmpty
+                                ? NetworkImage(_avatarUrl)
+                                : null,
+                            child: _avatarUrl.isEmpty
+                                ? const Icon(Icons.camera_alt,
+                                    color: Colors.white)
+                                : null,
                           ),
                         ),
                         const SizedBox(width: 14),
@@ -1200,19 +1299,16 @@ class _WalletTabState extends State {
                         ),
                       ],
                     ),
-                    const Divider(color: Colors.white24, height: 28),
-                    const Text('الرصيد المتاح',
-                        style: TextStyle(color: Colors.white70)),
-                    const SizedBox(height: 4),
+                    const Divider(color: Colors.white24, height: 24),
                     Text(
                       '${_balance.toStringAsFixed(2)} ج.م',
                       style: const TextStyle(
                         color: Color(0xFFD4AF37),
-                        fontSize: 30,
+                        fontSize: 28,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 14),
                     Row(
                       children: [
                         Expanded(
@@ -1233,7 +1329,31 @@ class _WalletTabState extends State {
                               backgroundColor: Colors.white,
                               foregroundColor: const Color(0xFF006A4E),
                             ),
-                            onPressed: _openQrScanner,
+                            onPressed: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (ctx) => Scaffold(
+                                    appBar: AppBar(
+                                        title: const Text('امسح كود QR')),
+                                    body: MobileScanner(
+                                      onDetect: (cap) {
+                                        if (cap.barcodes.isNotEmpty &&
+                                            cap.barcodes.first.rawValue !=
+                                                null) {
+                                          final val =
+                                              cap.barcodes.first.rawValue!;
+                                          Navigator.pop(ctx);
+                                          _openTransferDialog(
+                                              prefilledPhone: val.replaceAll(
+                                                  'EGMASR:', ''));
+                                        }
+                                      },
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
                             icon: const Icon(Icons.qr_code_scanner),
                             label: const Text('مسح QR'),
                           ),
@@ -1244,28 +1364,21 @@ class _WalletTabState extends State {
                 ),
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 16),
             Card(
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(20)),
               child: Padding(
-                padding: const EdgeInsets.all(20),
+                padding: const EdgeInsets.all(16),
                 child: Column(
                   children: [
-                    const Text(
-                      'كود الاستلام الخاص بك (QR)',
-                      style:
-                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 12),
+                    const Text('كود QR الخاص بك',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 10),
                     QrImageView(
                       data: 'EGMASR:${w.currentUserPhone}',
-                      version: QrVersions.auto,
-                      size: 180,
+                      size: 160,
                     ),
-                    const SizedBox(height: 8),
-                    Text(w.currentUserPhone,
-                        style: const TextStyle(color: Colors.grey)),
                   ],
                 ),
               ),
@@ -1277,133 +1390,411 @@ class _WalletTabState extends State {
   }
 }
 
+class AdminCompaniesScreen extends StatefulWidget {
+  const AdminCompaniesScreen({super.key});
+
+  @override
+  State createState() => _AdminCompaniesScreenState();
+}
+
+class _AdminCompaniesScreenState extends State {
+  List _companies = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCompanies();
+  }
+
+  Future _loadCompanies() async {
+    setState(() => _loading = true);
+    try {
+      final res = await supabase
+          .from('companies')
+          .select()
+          .order('created_at', ascending: false);
+      setState(() => _companies = List.from(res));
+    } catch (_) {}
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future _updateStatus(String id, String status) async {
+    await supabase.from('companies').update({'status': status}).eq('id', id);
+    _loadCompanies();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('إدارة واعتماد الشركات (Admin)')),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _companies.isEmpty
+              ? const Center(child: Text('لا توجد طلبات شركات حالياً'))
+              : ListView.builder(
+                  padding: const EdgeInsets.all(12),
+                  itemCount: _companies.length,
+                  itemBuilder: (_, i) {
+                    final c = _companies[i];
+                    final status = c['status'] ?? 'pending';
+                    return Card(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      child: Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(c['company_name'] ?? '',
+                                style: const TextStyle(
+                                    fontSize: 18, fontWeight: FontWeight.bold)),
+                            Text('العنوان: ${c['company_address']}'),
+                            Text('الرقم الضريبي: ${c['tax_id']}'),
+                            Text('المفوض: ${c['delegate_name']}'),
+                            Text('الموبايل: ${c['phone']}'),
+                            const SizedBox(height: 8),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Chip(
+                                  label: Text(status == 'approved'
+                                      ? 'معتمد ✅'
+                                      : status == 'rejected'
+                                          ? 'مرفوض ❌'
+                                          : 'قيد المراجعة ⏳'),
+                                ),
+                                Row(
+                                  children: [
+                                    ElevatedButton(
+                                      style: ElevatedButton.styleFrom(
+                                          backgroundColor: Colors.green,
+                                          foregroundColor: Colors.white),
+                                      onPressed: () =>
+                                          _updateStatus(c['id'], 'approved'),
+                                      child: const Text('موافقة'),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    OutlinedButton(
+                                      onPressed: () =>
+                                          _updateStatus(c['id'], 'rejected'),
+                                      child: const Text('رفض'),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+    );
+  }
+}
+
 // ============================================================================
-// 6. SERVICES, CAFES & RESTAURANTS TAB
+// 6. SERVICES, DIGITAL EGYPT, CORPORATE VIP (FLIGHTS, HOTELS, LUXURY DINING)
+//    & RESTAURANT DETAILS PAGE WITH PHOTOS BEFORE BOOKING
 // ============================================================================
 class ServicesTab extends StatelessWidget {
   final String currentUserPhone;
-  const ServicesTab({super.key, required this.currentUserPhone});
+  final bool isCorporate;
+  const ServicesTab({
+    super.key,
+    required this.currentUserPhone,
+    required this.isCorporate,
+  });
 
-  void _openBookingDialog(BuildContext context, String placeName) {
-    final guestsCtrl = TextEditingController(text: '2');
-    final timeCtrl = TextEditingController(text: '8:00 مساءً');
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('حجز طاولة في $placeName'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: guestsCtrl,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'عدد الأفراد'),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: timeCtrl,
-              decoration: const InputDecoration(labelText: 'الموعد المفضل'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                      'تم تأكيد حجزك في $placeName لعدد ${guestsCtrl.text} أفراد الساعة ${timeCtrl.text} ✅'),
-                  backgroundColor: const Color(0xFF006A4E),
+  void _openRealPaymentScreen(BuildContext context, String serviceTitle,
+      String fieldLabel, IconData icon) {
+    final accountCtrl = TextEditingController();
+    final amountCtrl = TextEditingController();
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (ctx) => Scaffold(
+          appBar: AppBar(title: Text(serviceTitle)),
+          body: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(icon, size: 54, color: const Color(0xFF006A4E)),
+                const SizedBox(height: 12),
+                Text('الدفع الفوري - $serviceTitle',
+                    style: const TextStyle(
+                        fontSize: 20, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 20),
+                TextField(
+                  controller: accountCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    labelText: fieldLabel,
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14)),
+                  ),
                 ),
-              );
-            },
-            child: const Text('تأكيد الحجز'),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: amountCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    labelText: 'المبلغ المطلوب (ج.م)',
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14)),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF006A4E),
+                      foregroundColor: Colors.white,
+                    ),
+                    onPressed: () {
+                      if (accountCtrl.text.trim().isEmpty ||
+                          amountCtrl.text.trim().isEmpty) {
+                        ScaffoldMessenger.of(ctx).showSnackBar(
+                          const SnackBar(content: Text('أدخل البيانات والمبلغ')),
+                        );
+                        return;
+                      }
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                              'تم سداد ${amountCtrl.text} ج.م لـ $serviceTitle بنجاح ✅'),
+                          backgroundColor: const Color(0xFF006A4E),
+                        ),
+                      );
+                    },
+                    child: const Text('تأكيد السداد الفوري',
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ],
+            ),
           ),
-        ],
+        ),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final quickServices = [
-      {'title': 'شحن رصيد', 'icon': Icons.phone_android},
-      {'title': 'فواتير الكهرباء', 'icon': Icons.electric_bolt},
-      {'title': 'فواتير المياه', 'icon': Icons.water_drop},
-      {'title': 'الإنترنت الأرضي', 'icon': Icons.wifi},
-      {'title': 'تذاكر المترو والقطار', 'icon': Icons.train},
-      {'title': 'تبرعات خيرية', 'icon': Icons.volunteer_activism},
+    final services = [
+      {
+        'title': 'مصر الرقمية',
+        'icon': Icons.account_balance,
+        'label': 'بوابة مصر الرقمية الحكومية',
+        'isGov': true,
+      },
+      {
+        'title': 'شحن رصيد',
+        'icon': Icons.phone_android,
+        'label': 'رقم الموبايل المراد شحنه',
+        'isGov': false,
+      },
+      {
+        'title': 'فواتير الكهرباء',
+        'icon': Icons.electric_bolt,
+        'label': 'رقم السداد الإلكتروني للعداد',
+        'isGov': false,
+      },
+      {
+        'title': 'فواتير المياه',
+        'icon': Icons.water_drop,
+        'label': 'رقم حساب فاتورة المياه',
+        'isGov': false,
+      },
+      {
+        'title': 'الإنترنت الأرضي',
+        'icon': Icons.wifi,
+        'label': 'رقم التليفون الأرضي بكود المحافظة',
+        'isGov': false,
+      },
+      {
+        'title': 'تذاكر المترو والقطار',
+        'icon': Icons.train,
+        'label': 'رقم المحطة / كود التذكرة',
+        'isGov': false,
+      },
     ];
 
-    final restaurants = [
+    final luxuryPlaces = [
       {
-        'name': 'كافيه النيل - الزمالك',
-        'cat': 'كافيه ومشروبات • إطلالة نيلية',
-        'rating': '4.9'
+        'name': 'مطعم وكافيه كازبلانكا - الزمالك',
+        'cat': 'مطعم فاخر • إطلالة مباشرة على النيل',
+        'rating': '4.9',
+        'address': 'شارع أبو الفدا، الزمالك، القاهرة',
+        'hours': '10:00 صباحاً - 2:00 صباحاً',
+        'desc':
+            'تجربة طعام راقية على ضفاف النيل مباشرة مع قائمة أطباق عالمية وشرقية وجلسات VIP مخصصة لرجال الأعمال والعائلات.',
+        'image':
+            'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800',
       },
       {
-        'name': 'مشويات الحاتي المصري',
-        'cat': 'مطعم مشويات • مدينة نصر والعاشر',
-        'rating': '4.8'
+        'name': 'قصر المشويات الملكي - التجمع الخامس',
+        'cat': 'مشويات وطواجن فاخرة • قاعات VIP',
+        'rating': '4.8',
+        'address': 'شارع التسعين الشمالي، القاهرة الجديدة',
+        'hours': '12:00 ظهراً - 1:00 صباحاً',
+        'desc':
+            'أفخم المشويات المصرية واللحوم الفاخرة مع قاعات اجتماعات خاصة للشركات وضيافة ملكية متكاملة.',
+        'image':
+            'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=800',
       },
       {
-        'name': 'قصر الكشري والطواجن',
-        'cat': 'أكلات مصرية أصيلة • توصيل وحجز',
-        'rating': '4.7'
-      },
-      {
-        'name': 'لاونج القلعة - التجمع',
-        'cat': 'كافيه ومطعم عائلي',
-        'rating': '4.8'
+        'name': 'جولدن نايل لاونج - جاردن سيتي',
+        'cat': 'كافيه ومطعم رجال أعمال • 5 نجوم',
+        'rating': '4.9',
+        'address': 'كورنيش النيل، جاردن سيتي، القاهرة',
+        'hours': '8:00 صباحاً - 3:00 صباحاً',
+        'desc':
+            'أجواء هادئة وفاخرة لاجتماعات الشركات والضيافة الرسمية مع أجود أنواع القهوة المختصة والمأكولات العالمية.',
+        'image':
+            'https://images.unsplash.com/photo-1559339352-11d035aa65de?w=800',
       },
     ];
 
     return Scaffold(
-      appBar: AppBar(title: const Text('الخدمات والمطاعم والكافيهات')),
+      appBar: AppBar(
+        title: Text(isCorporate
+            ? 'بوابة الشركات VIP والخدمات'
+            : 'الخدمات والمطاعم ومصر الرقمية'),
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const Text('الخدمات الحكومية والفواتير',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          if (isCorporate) ...[
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF004D38), Color(0xFF006A4E)],
+                ),
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.workspace_premium,
+                          color: Color(0xFFD4AF37), size: 28),
+                      SizedBox(width: 8),
+                      Text(
+                        'خدمات الشركات وكبار العملاء (VIP)',
+                        style: TextStyle(
+                            color: Color(0xFFD4AF37),
+                            fontSize: 17,
+                            fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFD4AF37),
+                            foregroundColor: Colors.black,
+                          ),
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const CorporateTravelScreen(
+                                      isFlight: true)),
+                            );
+                          },
+                          icon: const Icon(Icons.flight_takeoff),
+                          label: const Text('حجز طيران'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.white,
+                            foregroundColor: const Color(0xFF006A4E),
+                          ),
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const CorporateTravelScreen(
+                                      isFlight: false)),
+                            );
+                          },
+                          icon: const Icon(Icons.hotel),
+                          label: const Text('حجز فنادق'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+          ],
+          const Text('الخدمات الحكومية ومصر الرقمية والفواتير',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
           const SizedBox(height: 12),
           GridView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
-            itemCount: quickServices.length,
+            itemCount: services.length,
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 3,
-              childAspectRatio: 1.05,
+              childAspectRatio: 1.0,
               crossAxisSpacing: 10,
               mainAxisSpacing: 10,
             ),
             itemBuilder: (_, i) {
-              final s = quickServices[i];
+              final s = services[i];
+              final isGov = s['isGov'] == true;
               return Card(
+                color: isGov ? const Color(0xFF006A4E) : Colors.white,
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(14)),
                 child: InkWell(
                   borderRadius: BorderRadius.circular(14),
                   onTap: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                          content:
-                              Text('خدمة ${s['title']} متاحة للدفع الفوري')),
-                    );
+                    if (isGov) {
+                      launchUrl(Uri.parse('https://digital.gov.eg'),
+                          mode: LaunchMode.externalApplication);
+                    } else {
+                      _openRealPaymentScreen(
+                        context,
+                        s['title'] as String,
+                        s['label'] as String,
+                        s['icon'] as IconData,
+                      );
+                    }
                   },
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Icon(s['icon'] as IconData,
-                          color: const Color(0xFF006A4E), size: 30),
+                          color: isGov
+                              ? const Color(0xFFD4AF37)
+                              : const Color(0xFF006A4E),
+                          size: 30),
                       const SizedBox(height: 8),
                       Text(
                         s['title'] as String,
                         textAlign: TextAlign.center,
-                        style: const TextStyle(
-                            fontSize: 12, fontWeight: FontWeight.w600),
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: isGov ? Colors.white : Colors.black87,
+                        ),
                       ),
                     ],
                   ),
@@ -1412,32 +1803,311 @@ class ServicesTab extends StatelessWidget {
             },
           ),
           const SizedBox(height: 24),
-          const Text('حجز المطاعم والكافيهات',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const Text('أفخم المطاعم والكافيهات (معاينة وحجز)',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
           const SizedBox(height: 10),
-          ...restaurants.map((r) => Card(
-                margin: const EdgeInsets.only(bottom: 10),
+          ...luxuryPlaces.map((place) => Card(
+                margin: const EdgeInsets.only(bottom: 14),
+                clipBehavior: Clip.antiAlias,
                 shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14)),
-                child: ListTile(
-                  leading: const CircleAvatar(
-                    backgroundColor: Color(0xFF006A4E),
-                    child: Icon(Icons.restaurant, color: Color(0xFFD4AF37)),
-                  ),
-                  title: Text(r['name']!,
-                      style: const TextStyle(fontWeight: FontWeight.bold)),
-                  subtitle: Text('${r['cat']} • ⭐ ${r['rating']}'),
-                  trailing: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF006A4E),
-                      foregroundColor: Colors.white,
-                    ),
-                    onPressed: () => _openBookingDialog(context, r['name']!),
-                    child: const Text('احجز'),
+                    borderRadius: BorderRadius.circular(18)),
+                child: InkWell(
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => RestaurantDetailScreen(place: place),
+                      ),
+                    );
+                  },
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Image.network(
+                        place['image']!,
+                        height: 160,
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(place['name']!,
+                                      style: const TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.bold)),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                      '${place['cat']} • ⭐ ${place['rating']}',
+                                      style:
+                                          const TextStyle(color: Colors.grey)),
+                                ],
+                              ),
+                            ),
+                            ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF006A4E),
+                                foregroundColor: Colors.white,
+                              ),
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        RestaurantDetailScreen(place: place),
+                                  ),
+                                );
+                              },
+                              child: const Text('معاينة وحجز'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               )),
         ],
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// RESTAURANT FULL PREVIEW PAGE + BOOKING FORM ON SAME / RETURN FLOW
+// ============================================================================
+class RestaurantDetailScreen extends StatefulWidget {
+  final Map place;
+  const RestaurantDetailScreen({super.key, required this.place});
+
+  @override
+  State createState() => _RestaurantDetailScreenState();
+}
+
+class _RestaurantDetailScreenState extends State {
+  final _guestsCtrl = TextEditingController(text: '4');
+  final _timeCtrl = TextEditingController(text: '8:30 مساءً');
+  final _notesCtrl = TextEditingController();
+
+  RestaurantDetailScreen get w => widget as RestaurantDetailScreen;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = w.place;
+    return Scaffold(
+      appBar: AppBar(title: Text(p['name'] ?? '')),
+      body: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Image.network(
+              p['image'] ?? '',
+              height: 230,
+              width: double.infinity,
+              fit: BoxFit.cover,
+            ),
+            Padding(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Text(p['name'] ?? '',
+                            style: const TextStyle(
+                                fontSize: 20, fontWeight: FontWeight.bold)),
+                      ),
+                      Chip(
+                        backgroundColor: const Color(0xFFD4AF37),
+                        label: Text('⭐ ${p['rating']}'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text('📍 ${p['address']}',
+                      style: const TextStyle(color: Colors.black87)),
+                  const SizedBox(height: 4),
+                  Text('🕒 مواعيد العمل: ${p['hours']}',
+                      style: const TextStyle(color: Colors.grey)),
+                  const SizedBox(height: 12),
+                  Text(p['desc'] ?? '',
+                      style: const TextStyle(fontSize: 15, height: 1.5)),
+                  const Divider(height: 32),
+                  const Text('نموذج حجز طاولة / قاعة VIP',
+                      style:
+                          TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _guestsCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      labelText: 'عدد الأفراد',
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _timeCtrl,
+                    decoration: InputDecoration(
+                      labelText: 'الموعد والتاريخ',
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _notesCtrl,
+                    decoration: InputDecoration(
+                      labelText: 'ملاحظات إضافية (جلسة نيلية / قاعة شركات)',
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF006A4E),
+                        foregroundColor: Colors.white,
+                      ),
+                      onPressed: () {
+                        Navigator.pop(context);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                                'تم تأكيد حجزك في ${p['name']} لعدد ${_guestsCtrl.text} أفراد الساعة ${_timeCtrl.text} ✅'),
+                            backgroundColor: const Color(0xFF006A4E),
+                          ),
+                        );
+                      },
+                      child: const Text('تأكيد الحجز الآن',
+                          style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// CORPORATE VIP FLIGHTS & HOTELS BOOKING PORTAL
+// ============================================================================
+class CorporateTravelScreen extends StatelessWidget {
+  final bool isFlight;
+  const CorporateTravelScreen({super.key, required this.isFlight});
+
+  @override
+  Widget build(BuildContext context) {
+    final items = isFlight
+        ? [
+            {
+              'title': 'مصر للطيران (EGYPTAIR) - درجة رجال الأعمال',
+              'sub': 'القاهرة ✈️ دبي / الرياض / لندن • مرونة كاملة للشركات',
+              'price': '14,500 ج.م',
+            },
+            {
+              'title': 'طيران الإمارات (Emirates) - VIP Corporate',
+              'sub': 'القاهرة ✈️ دبي • صالة كبار الزوار + سيارة خاصة',
+              'price': '19,800 ج.م',
+            },
+            {
+              'title': 'الخطوط السعودية (SAUDIA) - Business Class',
+              'sub': 'القاهرة ✈️ جدة / الرياض • رحلات يومية مباشرة',
+              'price': '13,200 ج.م',
+            },
+          ]
+        : [
+            {
+              'title': 'فندق فورسيزونز نايل بلازا (Four Seasons)',
+              'sub': 'جاردن سيتي، القاهرة • أجنحة تنفيذية وقاعات مؤتمرات',
+              'price': '16,000 ج.م / ليلة',
+            },
+            {
+              'title': 'فندق ماريوت الزمالك (Cairo Marriott)',
+              'sub': 'الزمالك، القاهرة • إطلالة نيلية وخدمات رجال أعمال',
+              'price': '11,500 ج.م / ليلة',
+            },
+            {
+              'title': 'فندق سانت ريجيس الماسة - العاصمة الإدارية',
+              'sub': 'العاصمة الإدارية الجديدة • استضافة الوفود والشركات',
+              'price': '13,800 ج.م / ليلة',
+            },
+          ];
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(isFlight
+            ? 'حجز تذاكر طيران الشركات ✈️'
+            : 'حجز الفنادق الكبرى للشركات 🏨'),
+      ),
+      body: ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: items.length,
+        itemBuilder: (_, i) {
+          final item = items[i];
+          return Card(
+            margin: const EdgeInsets.only(bottom: 14),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(item['title']!,
+                      style: const TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  Text(item['sub']!,
+                      style: const TextStyle(color: Colors.grey)),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(item['price']!,
+                          style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF006A4E))),
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF006A4E),
+                          foregroundColor: Colors.white,
+                        ),
+                        onPressed: () {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                  'تم إرسال طلب حجز ${item['title']} لقسم حجوزات الشركات ✅'),
+                              backgroundColor: const Color(0xFF006A4E),
+                            ),
+                          );
+                        },
+                        child: const Text('احجز للشركة'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }
