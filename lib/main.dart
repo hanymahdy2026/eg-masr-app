@@ -196,7 +196,13 @@ class _LoginScreenState extends State {
       _generatedOtp = code;
       _otpSent = true;
       _otpCtrl.clear();
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('كود التأ
+ 
+ 
+    
+ScaffoldMessenger.of(context).showSnackBar(
+  SnackBar(
+    content: Text('كود التأكيد المتغير (6 أرقام): $code'),
+    backgroundColor: const Color(0xFF006A4E),
+    duration: const Duration(seconds: 8),
+  ),
+);
