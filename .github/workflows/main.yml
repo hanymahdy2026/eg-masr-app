@@ -1,4 +1,39 @@
-build-ios:
+name: Build EG Masr Android & iOS
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.29.0'
+          channel: 'stable'
+      - name: Prepare Android Project
+        run: |
+          flutter create --platforms=android .
+          flutter pub get
+          sed -i 's/id("org.jetbrains.kotlin.android") version ".*"/id("org.jetbrains.kotlin.android") version "2.1.0"/g' android/settings.gradle.kts || true
+          sed -i 's/minSdk = .*/minSdk = 23/g' android/app/build.gradle.kts || true
+          sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.CAMERA"/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <uses-permission android:name="android.permission.READ_CONTACTS"/>\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>' android/app/src/main/AndroidManifest.xml
+      - name: Build APK
+        run: flutter build apk --release
+      - name: Upload Android APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: eg-masr-android-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+  build-ios:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -10,15 +45,19 @@ build-ios:
         run: |
           flutter create --platforms=ios .
           flutter pub get
-          printf "platform :ios, '14.0'\nENV['COCOAPODS_DISABLE_STATS'] = 'true'\nproject 'Runner', {'Debug' => :debug, 'Profile' => :release, 'Release' => :release}\ndef flutter_root\n  path = File.expand_path(File.join('..', 'Flutter', 'Generated.xcconfig'), __FILE__)\n  File.foreach(path) { |line| m = line.match(/FLUTTER_ROOT\=(.*)/); return m[1].strip if m }\nend\nrequire File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)\nflutter_ios_podfile_setup\ntarget 'Runner' do\n  use_frameworks!\n  use_modular_headers!\n  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))\nend\npost_install do |installer|\n  installer.pods_project.targets.each do |target|\n    flutter_additional_ios_build_settings(target)\n    target.build_configurations.each { |c| c.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0' }\n  end\nend\n" > ios/Podfile
           plutil -insert NSCameraUsageDescription -string "مطلوب لتصوير الباركود والصور" ios/Runner/Info.plist || true
           plutil -insert NSMicrophoneUsageDescription -string "مطلوب لتسجيل الرسائل الصوتية" ios/Runner/Info.plist || true
           plutil -insert NSContactsUsageDescription -string "مطلوب للوصول لجهات الاتصال" ios/Runner/Info.plist || true
           plutil -insert NSPhotoLibraryUsageDescription -string "مطلوب لاختيار الصور والفيديوهات" ios/Runner/Info.plist || true
-          plutil -insert NSLocationWhenInUseUsageDescription -string "مطلوب لمشاركة موقعك الحالي" ios/Runner/Info.plist || true
+          plutil -insert NSLocationWhenInUseUsageDescription -string "مطلوب لتتبع الرحلات والباصات ومشاركة الموقع" ios/Runner/Info.plist || true
       - name: Build Unsigned iOS IPA
         run: |
-          flutter build ios --release --no-codesign
+          flutter build ios --release --no-codesign || true
+          if [ -f ios/Podfile ]; then
+            sed -i '' "s/# platform :ios, '.*'/platform :ios, '14.0'/g" ios/Podfile
+            sed -i '' "s/platform :ios, '.*'/platform :ios, '14.0'/g" ios/Podfile
+            flutter build ios --release --no-codesign
+          fi
           mkdir -p Payload
           cp -r build/ios/iphoneos/Runner.app Payload/
           zip -r eg-masr-ios.ipa Payload
