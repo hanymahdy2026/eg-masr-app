@@ -196,7 +196,7 @@ class _LoginScreenState extends State {
       _generatedOtp = code;
       _otpSent = true;
       _otpCtrl.clear();
- 
+ });
  
     
 ScaffoldMessenger.of(context).showSnackBar(
