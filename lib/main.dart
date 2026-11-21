@@ -206,3 +206,6 @@ ScaffoldMessenger.of(context).showSnackBar(
     duration: const Duration(seconds: 8),
   ),
 );
+}
+
+  Future _verifyAndEnter() async {
