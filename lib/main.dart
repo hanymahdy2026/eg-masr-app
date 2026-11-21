@@ -134,9 +134,6 @@ class _AuthGateState extends State {
   }
 }
 
-// ============================================================================
-// 1. LOGIN SCREEN (SECURITY RATE-LIMIT + 6-DIGIT DYNAMIC OTP + CORPORATE)
-// ============================================================================
 class LoginScreen extends StatefulWidget {
   final Function(String, String) onLoginSuccess;
   const LoginScreen({super.key, required this.onLoginSuccess});
@@ -194,7 +191,6 @@ class _LoginScreenState extends State {
       );
       return;
     }
-
     final code = (100000 + Random.secure().nextInt(899999)).toString();
     setState(() {
       _generatedOtp = code;
@@ -211,9 +207,7 @@ class _LoginScreenState extends State {
   }
 
   Future _verifyAndEnter() async {
-    if (_lockedUntil != null && DateTime.now().isBefore(_lockedUntil!)) {
-      return;
-    }
+    if (_lockedUntil != null && DateTime.now().isBefore(_lockedUntil!)) return;
     final phone = _normalizePhone(_phoneCtrl.text.trim());
     if (_otpCtrl.text.trim() != _generatedOtp || _generatedOtp.isEmpty) {
       _failedAttempts++;
@@ -258,8 +252,7 @@ class _LoginScreenState extends State {
                 builder: (ctx) => AlertDialog(
                   title: const Text('تم إرسال طلب تسجيل الشركة ⏳'),
                   content: const Text(
-                    'حساب شركتك قيد المراجعة الآن. لا يمكن الدخول لحساب الشركات إلا بعد موافقة مدير النظام (Admin).',
-                  ),
+                      'حساب شركتك قيد المراجعة الآن لحين موافقة الإدارة.'),
                   actions: [
                     ElevatedButton(
                         onPressed: () => Navigator.pop(ctx),
@@ -276,15 +269,12 @@ class _LoginScreenState extends State {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
-                content: Text('طلب شركتك ما زال في انتظار موافقة الإدارة ⏳'),
-                backgroundColor: Colors.orange,
-              ),
+                  content: Text('طلب شركتك ما زال في انتظار موافقة الإدارة ⏳')),
             );
           }
           setState(() => _busy = false);
           return;
         }
-
         final existingProf = await supabase
             .from('profiles')
             .select()
@@ -499,9 +489,6 @@ class _LoginScreenState extends State {
   }
 }
 
-// ============================================================================
-// 2. MAIN HOME SHELL
-// ============================================================================
 class MainHomeShell extends StatefulWidget {
   final String userPhone;
   final String accountType;
@@ -530,10 +517,7 @@ class _MainHomeShellState extends State {
           currentUserPhone: w.userPhone,
           isAdmin: w.userPhone == adminPhoneNumber,
           isCorporate: isComp),
-      ServicesTab(
-        currentUserPhone: w.userPhone,
-        isCorporate: isComp,
-      ),
+      ServicesTab(currentUserPhone: w.userPhone, isCorporate: isComp),
     ];
   }
 
@@ -559,9 +543,6 @@ class _MainHomeShellState extends State {
   }
 }
 
-// ============================================================================
-// 3. CHATS & LIVE GPS LOCATION SHARING (LIKE UBER)
-// ============================================================================
 class ChatsAndGroupsTab extends StatefulWidget {
   final String currentUserPhone;
   const ChatsAndGroupsTab({super.key, required this.currentUserPhone});
@@ -572,7 +553,6 @@ class ChatsAndGroupsTab extends StatefulWidget {
 class _ChatsAndGroupsTabState extends State {
   List _users = [];
   List _groups = [];
-  Set _blockedPhones = {};
   bool _loading = true;
   ChatsAndGroupsTab get w => widget as ChatsAndGroupsTab;
 
@@ -599,21 +579,10 @@ class _ChatsAndGroupsTabState extends State {
           .from('groups')
           .select()
           .order('created_at', ascending: false);
-      final rels = await supabase
-          .from('user_relations')
-          .select()
-          .eq('user_phone', w.currentUserPhone);
-      final blocked = <String>{};
-      for (var r in rels) {
-        if (r['relation_type'] == 'block') {
-          blocked.add(r['target_phone'].toString());
-        }
-      }
       if (mounted) {
         setState(() {
           _users = List.from(profs);
           _groups = List.from(grps);
-          _blockedPhones = blocked;
           _loading = false;
         });
       }
@@ -655,8 +624,6 @@ class _ChatsAndGroupsTabState extends State {
 
   @override
   Widget build(BuildContext context) {
-    final visibleUsers =
-        _users.where((u) => !_blockedPhones.contains(u['phone'])).toList();
     return DefaultTabController(
       length: 2,
       child: Scaffold(
@@ -673,10 +640,10 @@ class _ChatsAndGroupsTabState extends State {
             : TabBarView(
                 children: [
                   ListView.separated(
-                    itemCount: visibleUsers.length,
+                    itemCount: _users.length,
                     separatorBuilder: (_, __) => const Divider(height: 1),
                     itemBuilder: (_, i) {
-                      final u = visibleUsers[i];
+                      final u = _users[i];
                       final ph = u['phone'].toString();
                       return ListTile(
                         leading: const CircleAvatar(
@@ -694,8 +661,6 @@ class _ChatsAndGroupsTabState extends State {
                                 roomId: '${list[0]}_${list[1]}',
                                 peerPhone: ph,
                                 title: u['full_name'] ?? ph,
-                                isGroup: false,
-                                onRelationChanged: _loadData,
                               ),
                             ),
                           );
@@ -720,8 +685,6 @@ class _ChatsAndGroupsTabState extends State {
                               roomId: 'GROUP_${g['id']}',
                               peerPhone: g['id'].toString(),
                               title: g['group_name'] ?? 'جروب',
-                              isGroup: true,
-                              onRelationChanged: _loadData,
                             ),
                           ),
                         ),
@@ -774,7 +737,6 @@ class FullContactsScreen extends StatelessWidget {
                         roomId: '${list[0]}_${list[1]}',
                         peerPhone: m['phone'],
                         title: m['name'],
-                        isGroup: false,
                       ),
                     ),
                   );
@@ -801,18 +763,12 @@ class ChatRoomScreen extends StatefulWidget {
   final String roomId;
   final String peerPhone;
   final String title;
-  final bool isGroup;
-  final VoidCallback? onRelationChanged;
-
-  const ChatRoomScreen({
-    super.key,
-    required this.myPhone,
-    required this.roomId,
-    required this.peerPhone,
-    required this.title,
-    required this.isGroup,
-    this.onRelationChanged,
-  });
+  const ChatRoomScreen(
+      {super.key,
+      required this.myPhone,
+      required this.roomId,
+      required this.peerPhone,
+      required this.title});
   @override
   State createState() => _ChatRoomScreenState();
 }
@@ -865,18 +821,17 @@ class _ChatRoomScreenState extends State {
         perm = await Geolocator.requestPermission();
       }
       final pos = await Geolocator.getCurrentPosition();
-      String placeName = '';
+      String place = '';
       try {
         final marks =
             await placemarkFromCoordinates(pos.latitude, pos.longitude);
         if (marks.isNotEmpty) {
-          placeName =
-              ' (${marks.first.street ?? ''}, ${marks.first.locality ?? ''})';
+          place = ' (${marks.first.street ?? ''}, ${marks.first.locality ?? ''})';
         }
       } catch (_) {}
       final mapsUrl =
           'https://www.google.com/maps/search/?api=1&query=${pos.latitude},${pos.longitude}';
-      _sendMessage('📍 موقعي اللحظي$placeName:\n$mapsUrl', type: 'location');
+      _sendMessage('📍 موقعي اللحظي$place:\n$mapsUrl', type: 'location');
     } catch (_) {}
   }
 
@@ -888,7 +843,6 @@ class _ChatRoomScreenState extends State {
         actions: [
           IconButton(
               icon: const Icon(Icons.location_on),
-              tooltip: 'إرسال موقعي',
               onPressed: _sendMyLiveLocation),
           IconButton(
               icon: const Icon(Icons.refresh), onPressed: _fetchMessages),
@@ -958,9 +912,6 @@ class _ChatRoomScreenState extends State {
   }
 }
 
-// ============================================================================
-// 4. SOCIAL FEED TAB
-// ============================================================================
 class SocialFeedTab extends StatefulWidget {
   final String currentUserPhone;
   final bool isAdmin;
@@ -1182,19 +1133,15 @@ class _SocialFeedTabState extends State {
   }
 }
 
-// ============================================================================
-// 5. DIRECT ELECTRONIC WALLETS, EG MASR WALLET & UNIQUE QR CODE
-// ============================================================================
 class DirectPayAndQrTab extends StatefulWidget {
   final String currentUserPhone;
   final bool isAdmin;
   final bool isCorporate;
-  const DirectPayAndQrTab({
-    super.key,
-    required this.currentUserPhone,
-    required this.isAdmin,
-    required this.isCorporate,
-  });
+  const DirectPayAndQrTab(
+      {super.key,
+      required this.currentUserPhone,
+      required this.isAdmin,
+      required this.isCorporate});
   @override
   State createState() => _DirectPayAndQrTabState();
 }
@@ -1231,9 +1178,7 @@ class _DirectPayAndQrTabState extends State {
           .select()
           .eq('phone', w.currentUserPhone)
           .maybeSingle();
-      if (prof != null) {
-        _egMasrBalance = (prof['balance'] ?? 0).toDouble();
-      }
+      if (prof != null) _egMasrBalance = (prof['balance'] ?? 0).toDouble();
     } catch (_) {}
     if (mounted) setState(() => _uniqueQrToken = savedQr!);
   }
@@ -1245,7 +1190,7 @@ class _DirectPayAndQrTabState extends State {
       'فودافون كاش (Vodafone Cash)',
       'اتصالات كاش (e& Money)',
       'أورانج كاش (Orange Cash)',
-      'فيزا / ماستركارد / ميزة (Visa/Meeza)',
+      'فيزا / ماستركارد / ميزة',
       'محفظة EG MASR الإلكترونية',
     ];
     showDialog(
@@ -1422,7 +1367,6 @@ class AdminGovernanceScreen extends StatefulWidget {
 
 class _AdminGovernanceScreenState extends State {
   List _companies = [];
-
   @override
   void initState() {
     super.initState();
@@ -1482,9 +1426,6 @@ class _AdminGovernanceScreenState extends State {
   }
 }
 
-// ============================================================================
-// 6. SERVICES TAB: UBER RIDES + TALABAT + PICKUP/JUMBO + COMPANY BUS TRACKER
-// ============================================================================
 class ServicesTab extends StatelessWidget {
   final String currentUserPhone;
   final bool isCorporate;
@@ -1525,7 +1466,6 @@ class ServicesTab extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // 1. UBER-LIKE RIDES & DELIVERY SECTION
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -1625,8 +1565,6 @@ class ServicesTab extends StatelessWidget {
               ],
             ),
           ),
-
-          // 2. EXCLUSIVE CORPORATE FEATURE: FOLLOW THE BUS (تابع الباص)
           if (isCorporate) ...[
             const SizedBox(height: 16),
             Container(
@@ -1677,8 +1615,6 @@ class ServicesTab extends StatelessWidget {
               ),
             ),
           ],
-
-          // 3. RESTAURANTS, CAFES & HOTELS (OFFICIAL PREVIEW + IN-APP BOOKING)
           const SizedBox(height: 18),
           const Text('الفنادق والمطاعم والكافيهات (معاينة رسمية وحجز داخلي)',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
@@ -1715,7 +1651,7 @@ class ServicesTab extends StatelessWidget {
                                   backgroundColor: const Color(0xFF006A4E),
                                   foregroundColor: Colors.white),
                               onPressed: () => _openInAppBookingDialog(
-                                  context, p['name']!, p['type']!),
+                                  context, p['name']!),
                               icon: const Icon(Icons.bookmark_add, size: 18),
                               label: const Text('احجز من التطبيق'),
                             ),
@@ -1731,8 +1667,7 @@ class ServicesTab extends StatelessWidget {
     );
   }
 
-  void _openInAppBookingDialog(
-      BuildContext context, String placeName, String placeType) {
+  void _openInAppBookingDialog(BuildContext context, String placeName) {
     final guestsCtrl = TextEditingController(text: '2');
     DateTime date = DateTime.now().add(const Duration(days: 1));
     TimeOfDay time = const TimeOfDay(hour: 20, minute: 0);
@@ -1813,7 +1748,7 @@ class ServicesTab extends StatelessWidget {
                   'amount': 0.0,
                   'tx_type': 'booking',
                   'note':
-                      'حجز $placeName (${guestsCtrl.text} أفراد) يوم ${date.day}/${date.month} الساعة ${time.format(context)} - $payMethod',
+                      'حجز $placeName (${guestsCtrl.text} أفراد) يوم ${date.day}/${date.month} - $payMethod',
                 });
                 if (context.mounted) {
                   showDialog(
@@ -1821,7 +1756,7 @@ class ServicesTab extends StatelessWidget {
                     builder: (c) => AlertDialog(
                       title: const Text('تم تأكيد حجزك بنجاح ✅'),
                       content: Text(
-                          'المكان: $placeName\nالتاريخ: ${date.day}/${date.month}/${date.year}\nالساعة: ${time.format(context)}\nالدفع: $payMethod\nرقم الحجز: #$ref'),
+                          'المكان: $placeName\nالتاريخ: ${date.day}/${date.month}/${date.year}\nالدفع: $payMethod\nرقم الحجز: #$ref'),
                       actions: [
                         ElevatedButton(
                             onPressed: () => Navigator.pop(c),
@@ -1840,9 +1775,6 @@ class ServicesTab extends StatelessWidget {
   }
 }
 
-// ============================================================================
-// 7. UBER-LIKE RIDE & CARGO SCREEN (GPS + PRICING + QUARTER/JUMBO NEGOTIATION)
-// ============================================================================
 class UberRideAndCargoScreen extends StatefulWidget {
   final String customerPhone;
   final String initialMode;
@@ -1873,3 +1805,402 @@ class _UberRideAndCargoScreenState extends State {
   }
 
   Future _detectMyGpsLocation() async {
+    try {
+      LocationPermission perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      final pos = await Geolocator.getCurrentPosition();
+      _pickupLat = pos.latitude;
+      _pickupLng = pos.longitude;
+      String addr =
+          'موقعي الحالي (${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)})';
+      try {
+        final marks =
+            await placemarkFromCoordinates(pos.latitude, pos.longitude);
+        if (marks.isNotEmpty) {
+          addr =
+              '${marks.first.street ?? ''}, ${marks.first.subLocality ?? ''}, ${marks.first.locality ?? ''}';
+        }
+      } catch (_) {}
+      if (mounted) setState(() => _pickupCtrl.text = addr);
+    } catch (_) {}
+  }
+
+  double _calculateUberPrice() {
+    if (_vehicle == 'motorcycle') return 12.0 + (_distanceKm * 4.5);
+    if (_vehicle == 'car') return 20.0 + (_distanceKm * 8.0);
+    return double.tryParse(_offerPriceCtrl.text.trim()) ?? 0.0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isNegotiated =
+        _vehicle == 'quarter_truck' || _vehicle == 'jumbo_truck';
+    final estPrice = _calculateUberPrice();
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('اطلب رحلة أو نقل بضائع')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              ChoiceChip(
+                label: const Text('موتوسيكل 🏍️ (تسعيرة أوبر)'),
+                selected: _vehicle == 'motorcycle',
+                onSelected: (_) => setState(() => _vehicle = 'motorcycle'),
+              ),
+              ChoiceChip(
+                label: const Text('سيارة ملاكي 🚗 (تسعيرة أوبر)'),
+                selected: _vehicle == 'car',
+                onSelected: (_) => setState(() => _vehicle = 'car'),
+              ),
+              ChoiceChip(
+                label: const Text('ربع نقل 🛻 (باتفاق)'),
+                selected: _vehicle == 'quarter_truck',
+                onSelected: (_) => setState(() => _vehicle = 'quarter_truck'),
+              ),
+              ChoiceChip(
+                label: const Text('نقل جامبو 🚛 (باتفاق)'),
+                selected: _vehicle == 'jumbo_truck',
+                onSelected: (_) => setState(() => _vehicle = 'jumbo_truck'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _pickupCtrl,
+            decoration: InputDecoration(
+              labelText: 'موقع الانطلاق / التحميل',
+              prefixIcon: const Icon(Icons.my_location, color: Colors.green),
+              suffixIcon: IconButton(
+                icon: const Icon(Icons.gps_fixed),
+                onPressed: _detectMyGpsLocation,
+              ),
+              border:
+                  OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _dropoffCtrl,
+            decoration: InputDecoration(
+              labelText: 'موقع الوصول / التفريغ',
+              prefixIcon: const Icon(Icons.location_on, color: Colors.red),
+              border:
+                  OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (!isNegotiated) ...[
+            Row(
+              children: [
+                const Text('المسافة (كم): '),
+                Expanded(
+                  child: Slider(
+                    value: _distanceKm,
+                    min: 1,
+                    max: 60,
+                    divisions: 59,
+                    onChanged: (v) => setState(() => _distanceKm = v),
+                  ),
+                ),
+                Text('${_distanceKm.toStringAsFixed(1)} كم'),
+              ],
+            ),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                  color: const Color(0xFFE8F5E9),
+                  borderRadius: BorderRadius.circular(14)),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('التعريفة المقدرة:',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                  Text('${estPrice.toStringAsFixed(1)} ج.م',
+                      style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF006A4E))),
+                ],
+              ),
+            ),
+          ] else ...[
+            TextField(
+              controller: _offerPriceCtrl,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: 'اقترح السعر للاتفاق مع الكابتن (ج.م)',
+                prefixIcon: const Icon(Icons.handshake),
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _notesCtrl,
+              decoration: InputDecoration(
+                labelText: 'وصف الحمولة / الطلبات',
+                prefixIcon: const Icon(Icons.inventory),
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+            ),
+          ],
+          const SizedBox(height: 14),
+          DropdownButtonFormField(
+            value: _paymentMethod,
+            decoration: InputDecoration(
+              labelText: 'طريقة الدفع',
+              prefixIcon: const Icon(Icons.payment),
+              border:
+                  OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+            items: const [
+              DropdownMenuItem(value: 'cash', child: Text('💵 دفع نقدي (Cash)')),
+              DropdownMenuItem(
+                  value: 'vodafone_cash', child: Text('📱 فودافون كاش')),
+              DropdownMenuItem(
+                  value: 'etisalat_cash', child: Text('📱 اتصالات كاش')),
+              DropdownMenuItem(
+                  value: 'orange_cash', child: Text('📱 أورانج كاش')),
+              DropdownMenuItem(value: 'visa', child: Text('💳 فيزا / ماستركارد')),
+              DropdownMenuItem(
+                  value: 'egmasr_wallet', child: Text('🛡️ محفظة EG MASR')),
+            ],
+            onChanged: (v) {
+              if (v != null) setState(() => _paymentMethod = v.toString());
+            },
+          ),
+          const SizedBox(height: 18),
+          SizedBox(
+            height: 52,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF006A4E),
+                  foregroundColor: Colors.white),
+              onPressed: () async {
+                if (_pickupCtrl.text.trim().isEmpty ||
+                    _dropoffCtrl.text.trim().isEmpty) {
+                  return;
+                }
+                final code = 'EGM-${Random().nextInt(89999) + 10000}';
+                await supabase.from('delivery_orders').insert({
+                  'order_code': code,
+                  'customer_phone': w.customerPhone,
+                  'service_type': isNegotiated ? 'cargo' : 'ride',
+                  'vehicle_type': _vehicle,
+                  'pickup_location': _pickupCtrl.text.trim(),
+                  'dropoff_location': _dropoffCtrl.text.trim(),
+                  'pickup_lat': _pickupLat,
+                  'pickup_lng': _pickupLng,
+                  'details': _notesCtrl.text.trim(),
+                  'price': estPrice,
+                  'payment_method': _paymentMethod,
+                  'status': 'searching',
+                });
+                if (mounted) {
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => LiveTripTrackingScreen(
+                            userPhone: w.customerPhone)),
+                  );
+                }
+              },
+              icon: const Icon(Icons.check_circle),
+              label: Text(isNegotiated
+                  ? 'إرسال طلب النقل والاتفاق الآن'
+                  : 'تأكيد الرحلة (${estPrice.toStringAsFixed(1)} ج.م)'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class LiveTripTrackingScreen extends StatefulWidget {
+  final String userPhone;
+  const LiveTripTrackingScreen({super.key, required this.userPhone});
+  @override
+  State createState() => _LiveTripTrackingScreenState();
+}
+
+class _LiveTripTrackingScreenState extends State {
+  List _orders = [];
+  LiveTripTrackingScreen get w => widget as LiveTripTrackingScreen;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future _load() async {
+    final res = await supabase
+        .from('delivery_orders')
+        .select()
+        .eq('customer_phone', w.userPhone)
+        .order('created_at', ascending: false);
+    if (mounted) setState(() => _orders = List.from(res));
+  }
+
+  void _rateTripDialog(Map order) {
+    int stars = 5;
+    final commentCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSt) => AlertDialog(
+          title: const Text('قيّم رحلتك مع الكابتن ⭐'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(
+                  5,
+                  (idx) => IconButton(
+                    icon: Icon(idx < stars ? Icons.star : Icons.star_border,
+                        color: const Color(0xFFD4AF37), size: 32),
+                    onPressed: () => setSt(() => stars = idx + 1),
+                  ),
+                ),
+              ),
+              TextField(
+                  controller: commentCtrl,
+                  decoration:
+                      const InputDecoration(hintText: 'اكتب ملاحظاتك...')),
+            ],
+          ),
+          actions: [
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                await supabase.from('delivery_orders').update({
+                  'rating': stars,
+                  'rating_comment': commentCtrl.text.trim(),
+                }).eq('id', order['id']);
+                _load();
+              },
+              child: const Text('إرسال التقييم'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('المتابعة اللحظية للرحلة GPS'),
+        actions: [IconButton(icon: const Icon(Icons.refresh), onPressed: _load)],
+      ),
+      body: ListView.builder(
+        padding: const EdgeInsets.all(14),
+        itemCount: _orders.length,
+        itemBuilder: (_, i) {
+          final o = _orders[i];
+          final st = o['status'] ?? 'searching';
+          final capLat = o['captain_lat'];
+          final capLng = o['captain_lng'];
+          return Card(
+            margin: const EdgeInsets.only(bottom: 12),
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                      '${o['order_code']} • السعر: ${o['price'] == 0 ? 'باتفاق' : '${o['price']} ج.م'}',
+                      style: const TextStyle(fontWeight: FontWeight.bold)),
+                  Text('من: ${o['pickup_location']}'),
+                  Text('إلى: ${o['dropoff_location']}'),
+                  const Divider(),
+                  Text(
+                    st == 'searching'
+                        ? '🔍 جاري البحث عن أقرب كابتن...'
+                        : st == 'on_the_way'
+                            ? '🚀 الكابتن في الطريق إليك (${o['captain_phone']})'
+                            : '✅ وصلت بالسلامة',
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold, color: Color(0xFF006A4E)),
+                  ),
+                  if (capLat != null && capLng != null)
+                    TextButton.icon(
+                      onPressed: () => launchUrl(
+                          Uri.parse(
+                              'https://www.google.com/maps/search/?api=1&query=$capLat,$capLng'),
+                          mode: LaunchMode.externalApplication),
+                      icon: const Icon(Icons.map, color: Colors.red),
+                      label: const Text('شاهد موقع الكابتن المباشر على الخريطة'),
+                    ),
+                  if (st == 'delivered' && (o['rating'] ?? 0) == 0)
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFD4AF37),
+                          foregroundColor: Colors.black),
+                      onPressed: () => _rateTripDialog(o),
+                      icon: const Icon(Icons.star),
+                      label: const Text('قيّم الرحلة الآن'),
+                    ),
+                  if ((o['rating'] ?? 0) > 0)
+                    Text('تقييمك: ${'⭐' * (o['rating'] as int)}'),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class CaptainUberPortalScreen extends StatefulWidget {
+  final String captainPhone;
+  const CaptainUberPortalScreen({super.key, required this.captainPhone});
+  @override
+  State createState() => _CaptainUberPortalScreenState();
+}
+
+class _CaptainUberPortalScreenState extends State {
+  final _nameCtrl = TextEditingController();
+  final _plateCtrl = TextEditingController();
+  final _licenseCtrl = TextEditingController();
+  String _vehicle = 'car';
+  Map? _captain;
+  List _orders = [];
+  CaptainUberPortalScreen get w => widget as CaptainUberPortalScreen;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future _load() async {
+    final cap = await supabase
+        .from('captains')
+        .select()
+        .eq('phone', w.captainPhone)
+        .maybeSingle();
+    final ords = await supabase
+        .from('delivery_orders')
+        .select()
+        .order('created_at', ascending: false);
+    if (mounted) {
+      setState(() {
+        _captain = cap;
+        _orders = List.from(ords);
+      });
+    }
+  }
+
+  Future _broadcastMyLocation
