@@ -33,7 +33,7 @@ final supabase = Supabase.instance.client;
 
 class SecurityShield {
   static String signSession(String phone, String type) {
-    final bytes = utf8.encode('$phone|$type|$_appSecuritySalt');
+    final bytes = utf8.encode('$phone|$type\vert{}$_appSecuritySalt');
     return sha256.convert(bytes).toString();
   }
 
@@ -50,7 +50,7 @@ class SecurityShield {
     final nonce = Random.secure().nextInt(999999999).toString().padLeft(9, '0');
     final ts = DateTime.now().microsecondsSinceEpoch.toString();
     final digest = sha256
-        .convert(utf8.encode('$phone|$ts|$nonce|$_appSecuritySalt'))
+        .convert(utf8.encode('$phone\vert{}$ts|$nonce\vert{}$_appSecuritySalt'))
         .toString()
         .substring(0, 14)
         .toUpperCase();
@@ -87,7 +87,6 @@ Future _transferFunds(
 
 class EgMasrSuperApp extends StatelessWidget {
   const EgMasrSuperApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -134,7 +133,6 @@ class _AuthGateState extends State {
     final phone = prefs.getString('user_phone');
     final type = prefs.getString('account_type') ?? 'individual';
     final sig = prefs.getString('session_sig');
-
     if (phone != null &&
         phone.isNotEmpty &&
         SecurityShield.verifySession(phone, type, sig)) {
@@ -155,10 +153,7 @@ class _AuthGateState extends State {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     if (_savedPhone != null && _savedPhone!.isNotEmpty) {
-      return MainHomeShell(
-        userPhone: _savedPhone!,
-        accountType: _accountType,
-      );
+      return MainHomeShell(userPhone: _savedPhone!, accountType: _accountType);
     }
     return LoginScreen(
       onLoginSuccess: (phone, type) async {
@@ -197,390 +192,7 @@ class _LoginScreenState extends State {
   bool _busy = false;
   int _failedAttempts = 0;
   DateTime? _lockedUntil;
-
   LoginScreen get w => widget as LoginScreen;
 
   String _normalizePhone(String input) {
-    String p = input.replaceAll(RegExp(r'[^0-9]'), '');
-    if (p.startsWith('20') && p.length == 12) p = '0${p.substring(2)}';
-    if (p.length == 10 && p.startsWith('1')) p = '0$p';
-    return p;
-  }
-
-  void _sendOtpOnApp() {
-    if (_lockedUntil != null && DateTime.now().isBefore(_lockedUntil!)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('تم إيقاف المحاولات مؤقتاً للحماية انتظر دقيقة')),
-      );
-      return;
-    }
-    final phone = _normalizePhone(_phoneCtrl.text.trim());
-    if (phone.length < 11) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('أدخل رقم موبايل مصري صحيح (11 رقم)')),
-      );
-      return;
-    }
-    if (_isCorporate &&
-        (_companyNameCtrl.text.trim().isEmpty ||
-            _companyAddressCtrl.text.trim().isEmpty ||
-            _taxIdCtrl.text.trim().isEmpty ||
-            _delegateCtrl.text.trim().isEmpty)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('يرجى استكمال جميع بيانات المنشأة والمفوض')),
-      );
-      return;
-    }
-    final code = (100000 + Random.secure().nextInt(899999)).toString();
-    setState(() {
-      _generatedOtp = code;
-      _otpSent = true;
-      _otpCtrl.clear();
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('كود التأكيد المتغير (6 أرقام): $code'),
-        backgroundColor: const Color(0xFF006A4E),
-        duration: const Duration(seconds: 8),
-      ),
-    );
-  }
-
-  Future _verifyAndEnter() async {
-    if (_lockedUntil != null && DateTime.now().isBefore(_lockedUntil!)) return;
-    final phone = _normalizePhone(_phoneCtrl.text.trim());
-    if (_otpCtrl.text.trim() != _generatedOtp || _generatedOtp.isEmpty) {
-      _failedAttempts++;
-      if (_failedAttempts >= 3) {
-        _lockedUntil = DateTime.now().add(const Duration(minutes: 1));
-        _failedAttempts = 0;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('كود التأكيد غير صحيح!'), backgroundColor: Colors.red),
-      );
-      return;
-    }
-    _failedAttempts = 0;
-    setState(() => _busy = true);
-    try {
-      if (_isCorporate) {
-        final compName = SecurityShield.sanitize(_companyNameCtrl.text);
-        final compAddr = SecurityShield.sanitize(_companyAddressCtrl.text);
-        final taxId = SecurityShield.sanitize(_taxIdCtrl.text);
-        final delegate = SecurityShield.sanitize(_delegateCtrl.text);
-
-        final existingComp = await supabase
-            .from('companies')
-            .select()
-            .eq('phone', phone)
-            .maybeSingle();
-
-        if (existingComp == null) {
-          await supabase.from('companies').insert({
-            'company_name': compName,
-            'company_address': compAddr,
-            'tax_id': taxId,
-            'delegate_name': delegate,
-            'phone': phone,
-            'status': phone == adminPhoneNumber ? 'approved' : 'pending',
-          });
-          if (phone != adminPhoneNumber) {
-            if (mounted) {
-              showDialog(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  title: const Text('تم إرسال طلب تسجيل الشركة'),
-                  content: const Text(
-                      'حساب شركتك قيد المراجعة الآن لحين موافقة الإدارة.'),
-                  actions: [
-                    ElevatedButton(
-                        onPressed: () => Navigator.pop(ctx),
-                        child: const Text('حسناً'))
-                  ],
-                ),
-              );
-            }
-            setState(() => _busy = false);
-            return;
-          }
-        } else if ((existingComp['status'] ?? 'pending') != 'approved' &&
-            phone != adminPhoneNumber) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                  content: Text('طلب شركتك ما زال في انتظار موافقة الإدارة')),
-            );
-          }
-          setState(() => _busy = false);
-          return;
-        }
-        final existingProf = await supabase
-            .from('profiles')
-            .select()
-            .eq('phone', phone)
-            .maybeSingle();
-        if (existingProf == null) {
-          await supabase.from('profiles').insert({
-            'phone': phone,
-            'full_name': compName.isEmpty ? 'حساب شركات' : compName,
-            'balance': 0.0,
-            'avatar_url': '',
-          });
-        }
-        w.onLoginSuccess(phone, 'corporate');
-      } else {
-        final name = SecurityShield.sanitize(_nameCtrl.text).isEmpty
-            ? 'مستخدم EG Masr'
-            : SecurityShield.sanitize(_nameCtrl.text);
-        final existing = await supabase
-            .from('profiles')
-            .select()
-            .eq('phone', phone)
-            .maybeSingle();
-        if (existing == null) {
-          await supabase.from('profiles').insert({
-            'phone': phone,
-            'full_name': name,
-            'balance': 0.0,
-            'avatar_url': '',
-          });
-        }
-        w.onLoginSuccess(phone, 'individual');
-      }
-    } catch (_) {
-      w.onLoginSuccess(phone, _isCorporate ? 'corporate' : 'individual');
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF006A4E),
-      body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(20),
-            child: Card(
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(24)),
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const CircleAvatar(
-                      radius: 32,
-                      backgroundColor: Color(0xFF006A4E),
-                      child: Icon(Icons.verified_user,
-                          size: 34, color: Color(0xFFD4AF37)),
-                    ),
-                    const SizedBox(height: 10),
-                    const Text('EG MASR',
-                        style: TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF006A4E))),
-                    const Text('نظام مشفّر ومؤمّن بالكامل',
-                        style: TextStyle(fontSize: 11, color: Colors.grey)),
-                    const SizedBox(height: 14),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ChoiceChip(
-                            label: const Center(child: Text('حساب أفراد')),
-                            selected: !_isCorporate,
-                            selectedColor: const Color(0xFF006A4E),
-                            labelStyle: TextStyle(
-                                color: !_isCorporate
-                                    ? Colors.white
-                                    : Colors.black),
-                            onSelected: (_) =>
-                                setState(() => _isCorporate = false),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: ChoiceChip(
-                            label: const Center(child: Text('حساب شركات')),
-                            selected: _isCorporate,
-                            selectedColor: const Color(0xFFD4AF37),
-                            labelStyle: const TextStyle(
-                                color: Colors.black,
-                                fontWeight: FontWeight.bold),
-                            onSelected: (_) =>
-                                setState(() => _isCorporate = true),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    if (!_isCorporate)
-                      TextField(
-                        controller: _nameCtrl,
-                        decoration: InputDecoration(
-                          labelText: 'الاسم بالكامل',
-                          prefixIcon: const Icon(Icons.person),
-                          border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(14)),
-                        ),
-                      )
-                    else ...[
-                      TextField(
-                        controller: _companyNameCtrl,
-                        decoration: InputDecoration(
-                          labelText: 'اسم المنشأة / الشركة',
-                          prefixIcon: const Icon(Icons.business),
-                          border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(14)),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      TextField(
-                        controller: _companyAddressCtrl,
-                        decoration: InputDecoration(
-                          labelText: 'عنوان المنشأة بالتفصيل',
-                          prefixIcon: const Icon(Icons.location_on),
-                          border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(14)),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      TextField(
-                        controller: _taxIdCtrl,
-                        keyboardType: TextInputType.number,
-                        decoration: InputDecoration(
-                          labelText: 'رقم التسجيل الضريبي',
-                          prefixIcon: const Icon(Icons.receipt_long),
-                          border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(14)),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      TextField(
-                        controller: _delegateCtrl,
-                        decoration: InputDecoration(
-                          labelText: 'اسم المسؤول أو المفوض',
-                          prefixIcon: const Icon(Icons.badge),
-                          border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(14)),
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: _phoneCtrl,
-                      keyboardType: TextInputType.phone,
-                      decoration: InputDecoration(
-                        labelText: 'رقم الموبايل (01xxxxxxxxx)',
-                        prefixIcon: const Icon(Icons.phone_android),
-                        border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14)),
-                      ),
-                    ),
-                    if (_otpSent) ...[
-                      const SizedBox(height: 10),
-                      TextField(
-                        controller: _otpCtrl,
-                        keyboardType: TextInputType.number,
-                        decoration: InputDecoration(
-                          labelText: 'كود التأكيد (6 أرقام)',
-                          prefixIcon: const Icon(Icons.lock_open),
-                          border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(14)),
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 14),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 48,
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF006A4E),
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14)),
-                        ),
-                        onPressed: _busy
-                            ? null
-                            : (_otpSent ? _verifyAndEnter : _sendOtpOnApp),
-                        child: _busy
-                            ? const CircularProgressIndicator(color: Colors.white)
-                            : Text(
-                                _otpSent
-                                    ? 'تأكيد الكود والدخول'
-                                    : 'إرسال كود التأكيد',
-                                style: const TextStyle(
-                                    fontSize: 16, fontWeight: FontWeight.bold),
-                              ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class MainHomeShell extends StatefulWidget {
-  final String userPhone;
-  final String accountType;
-  const MainHomeShell(
-      {super.key, required this.userPhone, required this.accountType});
-  @override
-  State createState() => _MainHomeShellState();
-}
-
-class _MainHomeShellState extends State {
-  int _index = 0;
-  late final List _pages;
-  MainHomeShell get w => widget as MainHomeShell;
-
-  @override
-  void initState() {
-    super.initState();
-    final isAdmin = w.userPhone == adminPhoneNumber;
-    final isComp = w.accountType == 'corporate';
-    _pages = [
-      ChatsAndGroupsTab(currentUserPhone: w.userPhone),
-      SocialFeedTab(currentUserPhone: w.userPhone, isAdmin: isAdmin),
-      DirectPayAndQrTab(
-          currentUserPhone: w.userPhone,
-          isAdmin: isAdmin,
-          isCorporate: isComp),
-      ServicesTab(
-          currentUserPhone: w.userPhone,
-          canAccessBus: isComp || isAdmin),
-    ];
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: IndexedStack(index: _index, children: _pages.cast<Widget>()),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: const [
-          NavigationDestination(
-              icon: Icon(Icons.chat), label: 'المحادثات'),
-          NavigationDestination(
-              icon: Icon(Icons.dynamic_feed), label: 'الموجز'),
-          NavigationDestination(
-              icon: Icon(Icons.qr_code_scanner), label: 'المحفظة والباركود'),
-          NavigationDestination(
-              icon: Icon(Icons.local_taxi), label: 'المشاوير والخدمات'),
-        ],
-      ),
-    );
-  }
-}
+    String p = input.replaceAll(Reg
