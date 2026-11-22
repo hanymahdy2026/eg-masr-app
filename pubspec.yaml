@@ -28,3 +28,6 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+record: ^5.1.2
+  audioplayers: ^6.1.0
+  path_provider: ^2.1.4
