@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
@@ -12,6 +13,9 @@ import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
+import 'package:record/record.dart';
+import 'package:audioplayers/audioplayers.dart';
+import 'package:path_provider/path_provider.dart';
 
 const String supabaseUrl = 'https://bdbdimphbrsezftindck.supabase.co';
 const String supabaseAnonKey =
@@ -41,6 +45,18 @@ class SecurityShield {
   static String sanitize(String input) {
     return input.replaceAll(RegExp(r'[<>"\x27;]'), '').trim();
   }
+
+  static String generateUniqueQr(String phone, bool isCorporate) {
+    final nonce = Random.secure().nextInt(999999999).toString().padLeft(9, '0');
+    final ts = DateTime.now().microsecondsSinceEpoch.toString();
+    final digest = sha256
+        .convert(utf8.encode('$phone|$ts|$nonce|$_appSecuritySalt'))
+        .toString()
+        .substring(0, 14)
+        .toUpperCase();
+    final prefix = isCorporate ? 'EGMASR-CORP' : 'EGMASR-USER';
+    return '$prefix-$phone-$digest-$nonce';
+  }
 }
 
 class EgMasrSuperApp extends StatelessWidget {
@@ -57,7 +73,7 @@ class EgMasrSuperApp extends StatelessWidget {
           seedColor: const Color(0xFF006A4E),
           primary: const Color(0xFF006A4E),
           secondary: const Color(0xFFD4AF37),
-          surface: const Color(0xFFF4F6F5),
+          surface: const Color(0xFFF0F2F5),
         ),
         appBarTheme: const AppBarTheme(
           backgroundColor: Color(0xFF006A4E),
@@ -506,18 +522,18 @@ class _MainHomeShellState extends State {
   @override
   void initState() {
     super.initState();
-    final isComp =
-        w.accountType == 'corporate' || w.userPhone == adminPhoneNumber;
+    final isAdmin = w.userPhone == adminPhoneNumber;
+    final isComp = w.accountType == 'corporate';
     _pages = [
       ChatsAndGroupsTab(currentUserPhone: w.userPhone),
-      SocialFeedTab(
-          currentUserPhone: w.userPhone,
-          isAdmin: w.userPhone == adminPhoneNumber),
+      SocialFeedTab(currentUserPhone: w.userPhone, isAdmin: isAdmin),
       DirectPayAndQrTab(
           currentUserPhone: w.userPhone,
-          isAdmin: w.userPhone == adminPhoneNumber,
+          isAdmin: isAdmin,
           isCorporate: isComp),
-      ServicesTab(currentUserPhone: w.userPhone, isCorporate: isComp),
+      ServicesTab(
+          currentUserPhone: w.userPhone,
+          canAccessBus: isComp || isAdmin),
     ];
   }
 
@@ -530,13 +546,13 @@ class _MainHomeShellState extends State {
         onDestinationSelected: (i) => setState(() => _index = i),
         destinations: const [
           NavigationDestination(
-              icon: Icon(Icons.chat_bubble_outline), label: 'المحادثات'),
+              icon: Icon(Icons.chat), label: 'المحادثات'),
           NavigationDestination(
-              icon: Icon(Icons.dynamic_feed_outlined), label: 'الموجز'),
+              icon: Icon(Icons.dynamic_feed), label: 'الموجز'),
           NavigationDestination(
-              icon: Icon(Icons.qr_code_2), label: 'الدفع والباركود'),
+              icon: Icon(Icons.qr_code_scanner), label: 'المحفظة والباركود'),
           NavigationDestination(
-              icon: Icon(Icons.directions_car), label: 'أوبر والخدمات'),
+              icon: Icon(Icons.local_taxi), label: 'المشاوير والخدمات'),
         ],
       ),
     );
@@ -553,13 +569,16 @@ class ChatsAndGroupsTab extends StatefulWidget {
 class _ChatsAndGroupsTabState extends State {
   List _users = [];
   List _groups = [];
+  List _cachedContacts = [];
   bool _loading = true;
+  bool _contactsLoading = false;
   ChatsAndGroupsTab get w => widget as ChatsAndGroupsTab;
 
   @override
   void initState() {
     super.initState();
     _loadData();
+    _preloadContactsInBackground();
   }
 
   String _normalizePhone(String input) {
@@ -591,24 +610,50 @@ class _ChatsAndGroupsTabState extends State {
     }
   }
 
+  Future _preloadContactsInBackground() async {
+    if (_contactsLoading) return;
+    _contactsLoading = true;
+    try {
+      final granted = await FlutterContacts.requestPermission(readonly: true);
+      if (granted) {
+        final raw = await FlutterContacts.getContacts(
+            withProperties: true, withPhoto: false);
+        _cachedContacts = raw;
+      }
+    } catch (_) {}
+    _contactsLoading = false;
+  }
+
   Future _openContactsScreen() async {
-    final granted = await FlutterContacts.requestPermission(readonly: true);
-    if (!granted) return;
-    final contacts = await FlutterContacts.getContacts(withProperties: true);
-    final regMap = {};
+    if (_cachedContacts.isEmpty) {
+      await _preloadContactsInBackground();
+    }
+    final regMap = <String, dynamic>{};
     for (var u in _users) {
       regMap[_normalizePhone(u['phone'].toString())] = u;
     }
-    final matched = [];
-    final others = [];
-    for (final c in contacts) {
+    final matched = >[];
+    final others = >[];
+    final seen = <String>{};
+
+    for (final c in _cachedContacts) {
       for (final ph in c.phones) {
         final norm = _normalizePhone(ph.number);
-        if (norm.isEmpty || norm == w.currentUserPhone) continue;
+        if (norm.isEmpty || norm == w.currentUserPhone || seen.contains(norm)) {
+          continue;
+        }
+        seen.add(norm);
         if (regMap.containsKey(norm)) {
-          matched.add({'name': c.displayName, 'phone': norm});
+          matched.add({
+            'name': c.displayName.isEmpty ? norm : c.displayName,
+            'phone': norm,
+            'avatar': (regMap[norm]['avatar_url'] ?? '').toString(),
+          });
         } else {
-          others.add({'name': c.displayName, 'phone': ph.number});
+          others.add({
+            'name': c.displayName.isEmpty ? ph.number : c.displayName,
+            'phone': ph.number
+          });
         }
       }
     }
@@ -628,45 +673,84 @@ class _ChatsAndGroupsTabState extends State {
       length: 2,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('المحادثات والجروبات'),
+          title: const Text('EG MASR • المحادثات'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.person_pin),
+              tooltip: 'صفحتي الشخصية',
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => UserProfileScreen(
+                        userPhone: w.currentUserPhone, isMe: true)),
+              ),
+            ),
+          ],
           bottom: const TabBar(
             indicatorColor: Color(0xFFD4AF37),
             labelColor: Colors.white,
-            tabs: [Tab(text: 'محادثات خاصة'), Tab(text: 'الجروبات')],
+            tabs: [Tab(text: 'الدردشات الخاصة'), Tab(text: 'المجموعات')],
           ),
         ),
         body: _loading
             ? const Center(child: CircularProgressIndicator())
             : TabBarView(
                 children: [
-                  ListView.separated(
-                    itemCount: _users.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
-                    itemBuilder: (_, i) {
-                      final u = _users[i];
-                      final ph = u['phone'].toString();
-                      return ListTile(
-                        leading: const CircleAvatar(
-                            backgroundColor: Color(0xFF006A4E),
-                            child: Icon(Icons.person, color: Colors.white)),
-                        title: Text(u['full_name'] ?? ph),
-                        subtitle: Text(ph),
-                        onTap: () {
-                          final list = [w.currentUserPhone, ph]..sort();
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => ChatRoomScreen(
-                                myPhone: w.currentUserPhone,
-                                roomId: '${list[0]}_${list[1]}',
-                                peerPhone: ph,
-                                title: u['full_name'] ?? ph,
-                              ),
+                  RefreshIndicator(
+                    onRefresh: _loadData,
+                    child: ListView.separated(
+                      itemCount: _users.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (_, i) {
+                        final u = _users[i];
+                        final ph = u['phone'].toString();
+                        final avatar = (u['avatar_url'] ?? '').toString();
+                        return ListTile(
+                          leading: GestureDetector(
+                            onTap: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => UserProfileScreen(
+                                      userPhone: ph, isMe: false)),
                             ),
-                          );
-                        },
-                      );
-                    },
+                            child: CircleAvatar(
+                              radius: 24,
+                              backgroundColor: const Color(0xFF006A4E),
+                              backgroundImage: avatar.startsWith('http')
+                                  ? NetworkImage(avatar)
+                                  : null,
+                              child: !avatar.startsWith('http')
+                                  ? const Icon(Icons.person,
+                                      color: Colors.white)
+                                  : null,
+                            ),
+                          ),
+                          title: Text(u['full_name'] ?? ph,
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.bold)),
+                          subtitle: Text(ph,
+                              style: const TextStyle(
+                                  fontSize: 12, color: Colors.grey)),
+                          trailing: const Icon(Icons.chevron_right,
+                              color: Color(0xFF006A4E)),
+                          onTap: () {
+                            final list = [w.currentUserPhone, ph]..sort();
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => WhatsAppChatRoomScreen(
+                                  myPhone: w.currentUserPhone,
+                                  roomId: '${list[0]}_${list[1]}',
+                                  peerPhone: ph,
+                                  title: u['full_name'] ?? ph,
+                                  peerAvatar: avatar,
+                                ),
+                              ),
+                            );
+                          },
+                        );
+                      },
+                    ),
                   ),
                   ListView.builder(
                     itemCount: _groups.length,
@@ -676,15 +760,18 @@ class _ChatsAndGroupsTabState extends State {
                         leading: const CircleAvatar(
                             backgroundColor: Color(0xFFD4AF37),
                             child: Icon(Icons.groups, color: Colors.black)),
-                        title: Text(g['group_name'] ?? ''),
+                        title: Text(g['group_name'] ?? '',
+                            style:
+                                const TextStyle(fontWeight: FontWeight.bold)),
                         onTap: () => Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => ChatRoomScreen(
+                            builder: (_) => WhatsAppChatRoomScreen(
                               myPhone: w.currentUserPhone,
                               roomId: 'GROUP_${g['id']}',
                               peerPhone: g['id'].toString(),
                               title: g['group_name'] ?? 'جروب',
+                              peerAvatar: '',
                             ),
                           ),
                         ),
@@ -693,22 +780,21 @@ class _ChatsAndGroupsTabState extends State {
                   ),
                 ],
               ),
-        floatingActionButton: FloatingActionButton.extended(
+        floatingActionButton: FloatingActionButton(
           backgroundColor: const Color(0xFF006A4E),
           foregroundColor: Colors.white,
           onPressed: _openContactsScreen,
-          icon: const Icon(Icons.contacts),
-          label: const Text('جهات الاتصال'),
+          child: const Icon(Icons.message),
         ),
       ),
     );
   }
 }
 
-class FullContactsScreen extends StatelessWidget {
+class FullContactsScreen extends StatefulWidget {
   final String myPhone;
-  final List matched;
-  final List allContacts;
+  final List> matched;
+  final List> allContacts;
   const FullContactsScreen(
       {super.key,
       required this.myPhone,
@@ -716,198 +802,759 @@ class FullContactsScreen extends StatelessWidget {
       required this.allContacts});
 
   @override
+  State createState() => _FullContactsScreenState();
+}
+
+class _FullContactsScreenState extends State<FullContactsScreen> {
+  String _query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final filteredMatched = widget.matched
+        .where((m) =>
+            m['name']!.toLowerCase().contains(_query) ||
+            m['phone']!.contains(_query))
+        .toList();
+    final filteredOthers = widget.allContacts
+        .where((c) =>
+            c['name']!.toLowerCase().contains(_query) ||
+            c['phone']!.contains(_query))
+        .toList();
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('جهات الاتصال السريعة')),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(10),
+            child: TextField(
+              onChanged: (v) => setState(() => _query = v.trim().toLowerCase()),
+              decoration: InputDecoration(
+                hintText: 'ابحث بالاسم أو الرقم فوراً...',
+                prefixIcon: const Icon(Icons.search),
+                filled: true,
+                fillColor: Colors.white,
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+            ),
+          ),
+          Expanded(
+            child: ListView(
+              children: [
+                if (filteredMatched.isNotEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                    child: Text('موجودون على EG MASR',
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF006A4E))),
+                  ),
+                ...filteredMatched.map((m) => ListTile(
+                      leading: const CircleAvatar(
+                          backgroundColor: Color(0xFF006A4E),
+                          child: Icon(Icons.person, color: Colors.white)),
+                      title: Text(m['name']!,
+                          style: const TextStyle(fontWeight: FontWeight.bold)),
+                      subtitle: Text(m['phone']!),
+                      onTap: () {
+                        final list = [widget.myPhone, m['phone']!]..sort();
+                        Navigator.pushReplacement(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => WhatsAppChatRoomScreen(
+                              myPhone: widget.myPhone,
+                              roomId: '${list[0]}_${list[1]}',
+                              peerPhone: m['phone']!,
+                              title: m['name']!,
+                              peerAvatar: m['avatar'] ?? '',
+                            ),
+                          ),
+                        );
+                      },
+                    )),
+                if (filteredOthers.isNotEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                    child: Text('دعوة إلى EG MASR',
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold, color: Colors.grey)),
+                  ),
+                ...filteredOthers.take(150).map((c) => ListTile(
+                      leading: const CircleAvatar(child: Icon(Icons.phone)),
+                      title: Text(c['name']!),
+                      subtitle: Text(c['phone']!),
+                      trailing: TextButton(
+                        onPressed: () => launchUrl(Uri.parse(
+                            'sms:${c['phone']}?body=انضم لتطبيق EG MASR للتواصل والدفع والمشاوير')),
+                        child: const Text('دعوة'),
+                      ),
+                    )),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+class WhatsAppChatRoomScreen extends StatefulWidget {
+  final String myPhone;
+  final String roomId;
+  final String peerPhone;
+  final String title;
+  final String peerAvatar;
+  const WhatsAppChatRoomScreen(
+      {super.key,
+      required this.myPhone,
+      required this.roomId,
+      required this.peerPhone,
+      required this.title,
+      required this.peerAvatar});
+  @override
+  State createState() => _WhatsAppChatRoomScreenState();
+}
+
+class _WhatsAppChatRoomScreenState extends State<WhatsAppChatRoomScreen> {
+  final _msgCtrl = TextEditingController();
+  final _scrollCtrl = ScrollController();
+  final _recorder = AudioRecorder();
+  final _audioPlayer = AudioPlayer();
+  bool _isRecording = false;
+  String? _playingUrl;
+  late final Stream<List>> _messagesStream;
+
+  @override
+  void initState() {
+    super.initState();
+    _messagesStream = supabase
+        .from('messages')
+        .stream(primaryKey: ['id'])
+        .eq('room_id', widget.roomId)
+        .order('created_at', ascending: true);
+  }
+
+  @override
+  void dispose() {
+    _recorder.dispose();
+    _audioPlayer.dispose();
+    _msgCtrl.dispose();
+    _scrollCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<String> _uploadMedia(List<int> bytes, String ext) async {
+    final fileName =
+        'chat_${widget.myPhone}_${DateTime.now().millisecondsSinceEpoch}.$ext';
+    for (final bucket in ['media', 'avatars']) {
+      try {
+        await supabase.storage.from(bucket).uploadBinary(
+            fileName, bytes as dynamic,
+            fileOptions: const FileOptions(upsert: true));
+        return supabase.storage.from(bucket).getPublicUrl(fileName);
+      } catch (_) {}
+    }
+    return '';
+  }
+
+  Future<void> _sendMessage(String text,
+      {String type = 'text', String mediaUrl = ''}) async {
+    if (text.trim().isEmpty && mediaUrl.isEmpty) return;
+    _msgCtrl.clear();
+    try {
+      await supabase.from('messages').insert({
+        'room_id': widget.roomId,
+        'sender_phone': widget.myPhone,
+        'receiver_phone': widget.peerPhone,
+        'content': text.trim(),
+        'msg_type': type,
+        'media_url': mediaUrl,
+      });
+      Future.delayed(const Duration(milliseconds: 200), () {
+        if (_scrollCtrl.hasClients) {
+          _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
+        }
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _pickAndSendImage(ImageSource src) async {
+    final picker = ImagePicker();
+    final img = await picker.pickImage(source: src, imageQuality: 75);
+    if (img == null) return;
+    final bytes = await img.readAsBytes();
+    final url = await _uploadMedia(bytes, 'jpg');
+    if (url.isNotEmpty) {
+      await _sendMessage('صورة مرفقة', type: 'image', mediaUrl: url);
+    }
+  }
+
+  Future<void> _pickAndSendVideo() async {
+    final picker = ImagePicker();
+    final vid = await picker.pickVideo(source: ImageSource.gallery);
+    if (vid == null) return;
+    final bytes = await vid.readAsBytes();
+    final url = await _uploadMedia(bytes, 'mp4');
+    if (url.isNotEmpty) {
+      await _sendMessage('فيديو مرفق', type: 'video', mediaUrl: url);
+    }
+  }
+
+  Future<void> _sendHighAccuracyLocation() async {
+    try {
+      LocationPermission perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      final pos = await Geolocator.getCurrentPosition(
+          locationSettings:
+              const LocationSettings(accuracy: LocationAccuracy.best));
+      String place = '';
+      try {
+        final marks =
+            await placemarkFromCoordinates(pos.latitude, pos.longitude);
+        if (marks.isNotEmpty) {
+          place =
+              ' (${marks.first.street ?? ''}, ${marks.first.subLocality ?? ''}, ${marks.first.locality ?? ''})';
+        }
+      } catch (_) {}
+      final mapsUrl =
+          'https://www.google.com/maps/search/?api=1&query=${pos.latitude},${pos.longitude}';
+      await _sendMessage('موقعي المباشر بدقة عالية$place:\n$mapsUrl',
+          type: 'location');
+    } catch (_) {}
+  }
+
+  Future<void> _toggleVoiceRecording() async {
+    try {
+      if (_isRecording) {
+        final path = await _recorder.stop();
+        setState(() => _isRecording = false);
+        if (path != null) {
+          final file = File(path);
+          if (await file.exists()) {
+            final bytes = await file.readAsBytes();
+            final url = await _uploadMedia(bytes, 'm4a');
+            if (url.isNotEmpty) {
+              await _sendMessage('رسالة صوتية 🎤', type: 'audio', mediaUrl: url);
+            }
+          }
+        }
+      } else {
+        if (await _recorder.hasPermission()) {
+          final dir = await getTemporaryDirectory();
+          final filePath =
+              '${dir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+          await _recorder.start(const RecordConfig(), path: filePath);
+          setState(() => _isRecording = true);
+        }
+      }
+    } catch (_) {
+      setState(() => _isRecording = false);
+    }
+  }
+
+  void _openInChatMoneyTransfer() {
+    final amountCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('تحويل أموال إلى ${widget.title}'),
+        content: TextField(
+          controller: amountCtrl,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(
+              labelText: 'المبلغ بالجنيه المصري (ج.م)',
+              prefixIcon: Icon(Icons.payments)),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF006A4E),
+                foregroundColor: Colors.white),
+            onPressed: () async {
+              final amt = double.tryParse(amountCtrl.text.trim()) ?? 0.0;
+              if (amt <= 0) return;
+              Navigator.pop(ctx);
+              await _transferFunds(
+                  widget.myPhone, widget.peerPhone, amt, 'تحويل داخل المحادثة');
+              await _sendMessage(
+                  'تم تحويل مبلغ ${amt.toStringAsFixed(2)} ج.م إلى محفظتك بنجاح 💸',
+                  type: 'money');
+            },
+            child: const Text('إرسال المبلغ الآن'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAttachmentSheet() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Wrap(
+          alignment: WrapAlignment.spaceAround,
+          runSpacing: 16,
+          children: [
+            _attachOption(Icons.photo_library, 'صورة', Colors.purple, () {
+              Navigator.pop(ctx);
+              _pickAndSendImage(ImageSource.gallery);
+            }),
+            _attachOption(Icons.camera_alt, 'كاميرا', Colors.pink, () {
+              Navigator.pop(ctx);
+              _pickAndSendImage(ImageSource.camera);
+            }),
+            _attachOption(Icons.videocam, 'فيديو', Colors.orange, () {
+              Navigator.pop(ctx);
+              _pickAndSendVideo();
+            }),
+            _attachOption(Icons.location_on, 'موقعي GPS', Colors.green, () {
+              Navigator.pop(ctx);
+              _sendHighAccuracyLocation();
+            }),
+            _attachOption(Icons.payments, 'تحويل أموال', const Color(0xFFD4AF37),
+                () {
+              Navigator.pop(ctx);
+              _openInChatMoneyTransfer();
+            }),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _attachOption(
+      IconData icon, String label, Color color, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      child: SizedBox(
+        width: 80,
+        child: Column(
+          children: [
+            CircleAvatar(
+                radius: 26,
+                backgroundColor: color,
+                child: Icon(icon, color: Colors.white)),
+            const SizedBox(height: 6),
+            Text(label, style: const TextStyle(fontSize: 12)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('جهات الاتصال')),
-      body: ListView(
+      backgroundColor: const Color(0xFFECE5DD),
+      appBar: AppBar(
+        titleSpacing: 0,
+        title: Row(
+          children: [
+            CircleAvatar(
+              radius: 18,
+              backgroundColor: const Color(0xFFD4AF37),
+              backgroundImage: widget.peerAvatar.startsWith('http')
+                  ? NetworkImage(widget.peerAvatar)
+                  : null,
+              child: !widget.peerAvatar.startsWith('http')
+                  ? const Icon(Icons.person, color: Colors.black, size: 20)
+                  : null,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(widget.title,
+                      style: const TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.bold)),
+                  const Text('متصل • محادثة خاصة مشفرة',
+                      style: TextStyle(fontSize: 11, color: Colors.white70)),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          IconButton(
+              icon: const Icon(Icons.payments),
+              onPressed: _openInChatMoneyTransfer),
+        ],
+      ),
+      body: Column(
         children: [
-          ...matched.map((m) => ListTile(
-                leading: const CircleAvatar(
-                    backgroundColor: Color(0xFF006A4E),
-                    child: Icon(Icons.person, color: Colors.white)),
-                title: Text(m['name']),
-                subtitle: Text(m['phone']),
-                onTap: () {
-                  final list = [myPhone, m['phone'].toString()]..sort();
-                  Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => ChatRoomScreen(
-                        myPhone: myPhone,
-                        roomId: '${list[0]}_${list[1]}',
-                        peerPhone: m['phone'],
-                        title: m['name'],
+          Expanded(
+            child: StreamBuilder<List>>(
+              stream: _messagesStream,
+              builder: (context, snapshot) {
+                if (!snapshot.hasData) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                final messages = snapshot.data!;
+                return ListView.builder(
+                  controller: _scrollCtrl,
+                  padding: const EdgeInsets.all(12),
+                  itemCount: messages.length,
+                  itemBuilder: (_, i) {
+                    final m = messages[i];
+                    final isMe = m['sender_phone'] == widget.myPhone;
+                    final content = (m['content'] ?? '').toString();
+                    final type = (m['msg_type'] ?? 'text').toString();
+                    final mediaUrl = (m['media_url'] ?? '').toString();
+                    final isUrl = content.contains('http://') ||
+                        content.contains('https://');
+                    final timeStr = (m['created_at'] ?? '').toString().length >=
+                            16
+                        ? m['created_at'].toString().substring(11, 16)
+                        : '';
+
+                    return Align(
+                      alignment:
+                          isMe ? Alignment.centerRight : Alignment.centerLeft,
+                      child: Container(
+                        constraints: BoxConstraints(
+                            maxWidth: MediaQuery.of(context).size.width * 0.76),
+                        margin: const EdgeInsets.symmetric(vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: isMe
+                              ? const Color(0xFFDCF8C6)
+                              : Colors.white,
+                          borderRadius: BorderRadius.only(
+                            topLeft: const Radius.circular(14),
+                            topRight: const Radius.circular(14),
+                            bottomLeft: Radius.circular(isMe ? 14 : 0),
+                            bottomRight: Radius.circular(isMe ? 0 : 14),
+                          ),
+                          boxShadow: const [
+                            BoxShadow(
+                                color: Colors.black12,
+                                blurRadius: 2,
+                                offset: Offset(0, 1))
+                          ],
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            if (type == 'image' &&
+                                mediaUrl.startsWith('http'))
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(10),
+                                child: Image.network(mediaUrl,
+                                    width: 220, fit: BoxFit.cover),
+                              )
+                            else if (type == 'video' &&
+                                mediaUrl.startsWith('http'))
+                              ElevatedButton.icon(
+                                onPressed: () => launchUrl(Uri.parse(mediaUrl),
+                                    mode: LaunchMode.externalApplication),
+                                icon: const Icon(Icons.play_circle_fill),
+                                label: const Text('تشغيل الفيديو'),
+                              )
+                            else if (type == 'audio' &&
+                                mediaUrl.startsWith('http'))
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    icon: Icon(
+                                        _playingUrl == mediaUrl
+                                            ? Icons.stop_circle
+                                            : Icons.play_circle_fill,
+                                        color: const Color(0xFF006A4E),
+                                        size: 32),
+                                    onPressed: () async {
+                                      if (_playingUrl == mediaUrl) {
+                                        await _audioPlayer.stop();
+                                        setState(() => _playingUrl = null);
+                                      } else {
+                                        setState(() => _playingUrl = mediaUrl);
+                                        await _audioPlayer
+                                            .play(UrlSource(mediaUrl));
+                                      }
+                                    },
+                                  ),
+                                  const Text('تسجيل صوتي',
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.bold)),
+                                ],
+                              )
+                            else
+                              InkWell(
+                                onTap: isUrl
+                                    ? () {
+                                        final match = RegExp(r'https?://\S+')
+                                            .firstMatch(content);
+                                        if (match != null) {
+                                          launchUrl(
+                                              Uri.parse(match.group(0)!),
+                                              mode: LaunchMode
+                                                  .externalApplication);
+                                        }
+                                      }
+                                    : null,
+                                child: Text(
+                                  content,
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    color: isUrl
+                                        ? Colors.blue.shade800
+                                        : Colors.black87,
+                                    decoration: isUrl
+                                        ? TextDecoration.underline
+                                        : TextDecoration.none,
+                                  ),
+                                ),
+                              ),
+                            const SizedBox(height: 3),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(timeStr,
+                                    style: const TextStyle(
+                                        fontSize: 10, color: Colors.grey)),
+                                if (isMe) ...[
+                                  const SizedBox(width: 4),
+                                  const Icon(Icons.done_all,
+                                      size: 14, color: Colors.blue),
+                                ],
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(6),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(25),
                     ),
-                  );
-                },
-              )),
-          ...allContacts.map((c) => ListTile(
-                leading: const CircleAvatar(child: Icon(Icons.phone)),
-                title: Text(c['name']),
-                subtitle: Text(c['phone']),
-                trailing: TextButton(
-                  onPressed: () => launchUrl(
-                      Uri.parse('sms:${c['phone']}?body=انضم لتطبيق EG MASR')),
-                  child: const Text('دعوة'),
+                    child: Row(
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.attach_file,
+                              color: Colors.grey),
+                          onPressed: _showAttachmentSheet,
+                        ),
+                        Expanded(
+                          child: TextField(
+                            controller: _msgCtrl,
+                            decoration: InputDecoration(
+                              hintText: _isRecording
+                                  ? 'جاري تسجيل الصوت...'
+                                  : 'رسالة...',
+                              border: InputBorder.none,
+                            ),
+                            onSubmitted: (v) => _sendMessage(v),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.camera_alt,
+                              color: Colors.grey),
+                          onPressed: () =>
+                              _pickAndSendImage(ImageSource.camera),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-              )),
+                const SizedBox(width: 6),
+                CircleAvatar(
+                  radius: 24,
+                  backgroundColor: _isRecording
+                      ? Colors.red
+                      : const Color(0xFF006A4E),
+                  child: IconButton(
+                    icon: Icon(
+                      _isRecording ? Icons.stop : Icons.mic,
+                      color: Colors.white,
+                    ),
+                    onPressed: _toggleVoiceRecording,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                CircleAvatar(
+                  radius: 24,
+                  backgroundColor: const Color(0xFF006A4E),
+                  child: IconButton(
+                    icon: const Icon(Icons.send, color: Colors.white),
+                    onPressed: () => _sendMessage(_msgCtrl.text),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
 }
 
-class ChatRoomScreen extends StatefulWidget {
-  final String myPhone;
-  final String roomId;
-  final String peerPhone;
-  final String title;
-  const ChatRoomScreen(
-      {super.key,
-      required this.myPhone,
-      required this.roomId,
-      required this.peerPhone,
-      required this.title});
+class UserProfileScreen extends StatefulWidget {
+  final String userPhone;
+  final bool isMe;
+  const UserProfileScreen(
+      {super.key, required this.userPhone, required this.isMe});
   @override
-  State createState() => _ChatRoomScreenState();
+  State createState() => _UserProfileScreenState();
 }
 
-class _ChatRoomScreenState extends State {
-  final _msgCtrl = TextEditingController();
-  List _messages = [];
-  ChatRoomScreen get w => widget as ChatRoomScreen;
+class _UserProfileScreenState extends State<UserProfileScreen> {
+  Map? _profile;
+  List _userPosts = [];
+  bool _loading = true;
 
   @override
   void initState() {
     super.initState();
-    _fetchMessages();
+    _loadProfile();
   }
 
-  Future _fetchMessages() async {
+  Future<void> _loadProfile() async {
     try {
-      final res = await supabase
-          .from('messages')
+      final prof = await supabase
+          .from('profiles')
           .select()
-          .eq('room_id', w.roomId)
-          .order('created_at', ascending: true);
-      if (mounted) setState(() => _messages = List.from(res));
-    } catch (_) {}
-  }
-
-  Future _sendMessage(String text, {String type = 'text'}) async {
-    if (text.trim().isEmpty) return;
-    _msgCtrl.clear();
-    setState(() => _messages.add({
-          'sender_phone': w.myPhone,
-          'content': text.trim(),
-          'msg_type': type
-        }));
-    try {
-      await supabase.from('messages').insert({
-        'room_id': w.roomId,
-        'sender_phone': w.myPhone,
-        'receiver_phone': w.peerPhone,
-        'content': text.trim(),
-        'msg_type': type,
-      });
-    } catch (_) {}
-  }
-
-  Future _sendMyLiveLocation() async {
-    try {
-      LocationPermission perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied) {
-        perm = await Geolocator.requestPermission();
+          .eq('phone', widget.userPhone)
+          .maybeSingle();
+      final posts = await supabase
+          .from('posts')
+          .select()
+          .eq('author_phone', widget.userPhone)
+          .order('created_at', ascending: false);
+      if (mounted) {
+        setState(() {
+          _profile = prof;
+          _userPosts = List.from(posts);
+          _loading = false;
+        });
       }
-      final pos = await Geolocator.getCurrentPosition();
-      String place = '';
-      try {
-        final marks =
-            await placemarkFromCoordinates(pos.latitude, pos.longitude);
-        if (marks.isNotEmpty) {
-          place = ' (${marks.first.street ?? ''}, ${marks.first.locality ?? ''})';
-        }
-      } catch (_) {}
-      final mapsUrl =
-          'https://www.google.com/maps/search/?api=1&query=${pos.latitude},${pos.longitude}';
-      _sendMessage('موقعي اللحظي$place:\n$mapsUrl', type: 'location');
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _changeProfilePhoto() async {
+    final picker = ImagePicker();
+    final img =
+        await picker.pickImage(source: ImageSource.gallery, imageQuality: 75);
+    if (img == null) return;
+    final bytes = await img.readAsBytes();
+    final fileName =
+        'avatar_${widget.userPhone}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    try {
+      await supabase.storage
+          .from('avatars')
+          .uploadBinary(fileName, bytes, fileOptions: const FileOptions(upsert: true));
+      final url = supabase.storage.from('avatars').getPublicUrl(fileName);
+      await supabase
+          .from('profiles')
+          .update({'avatar_url': url}).eq('phone', widget.userPhone);
+      _loadProfile();
     } catch (_) {}
   }
 
   @override
   Widget build(BuildContext context) {
+    final name = _profile?['full_name'] ?? widget.userPhone;
+    final avatar = (_profile?['avatar_url'] ?? '').toString();
+
     return Scaffold(
-      appBar: AppBar(
-        title: Text(w.title),
-        actions: [
-          IconButton(
-              icon: const Icon(Icons.location_on),
-              onPressed: _sendMyLiveLocation),
-          IconButton(
-              icon: const Icon(Icons.refresh), onPressed: _fetchMessages),
-        ],
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: ListView.builder(
-              padding: const EdgeInsets.all(12),
-              itemCount: _messages.length,
-              itemBuilder: (_, i) {
-                final m = _messages[i];
-                final isMe = m['sender_phone'] == w.myPhone;
-                final content = m['content'].toString();
-                final isLoc = content.contains('https://www.google.com/maps');
-                return Align(
-                  alignment:
-                      isMe ? Alignment.centerRight : Alignment.centerLeft,
-                  child: InkWell(
-                    onTap: isLoc
-                        ? () => launchUrl(
-                            Uri.parse(content.split('\n').last.trim()),
-                            mode: LaunchMode.externalApplication)
-                        : null,
-                    child: Container(
-                      margin: const EdgeInsets.symmetric(vertical: 4),
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: isMe ? const Color(0xFF006A4E) : Colors.white,
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Text(content,
-                          style: TextStyle(
-                              color: isMe ? Colors.white : Colors.black87)),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.all(6),
-            color: Colors.white,
-            child: Row(
+      appBar: AppBar(title: Text(name)),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
               children: [
-                IconButton(
-                    icon: const Icon(Icons.my_location, color: Colors.red),
-                    onPressed: _sendMyLiveLocation),
-                Expanded(
-                  child: TextField(
-                    controller: _msgCtrl,
-                    decoration: const InputDecoration(
-                        hintText: 'اكتب رسالتك...', border: InputBorder.none),
-                    onSubmitted: _sendMessage,
+                Container(
+                  color: Colors.white,
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    children: [
+                      Stack(
+                        children: [
+                          CircleAvatar(
+                            radius: 54,
+                            backgroundColor: const Color(0xFF006A4E),
+                            backgroundImage: avatar.startsWith('http')
+                                ? NetworkImage(avatar)
+                                : null,
+                            child: !avatar.startsWith('http')
+                                ? const Icon(Icons.person,
+                                    size: 54, color: Colors.white)
+                                : null,
+                          ),
+                          if (widget.isMe)
+                            Positioned(
+                              bottom: 0,
+                              right: 0,
+                              child: CircleAvatar(
+                                radius: 18,
+                                backgroundColor: const Color(0xFFD4AF37),
+                                child: IconButton(
+                                  icon: const Icon(Icons.camera_alt,
+                                      size: 16, color: Colors.black),
+                                  onPressed: _changeProfilePhoto,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Text(name,
+                          style: const TextStyle(
+                              fontSize: 22, fontWeight: FontWeight.bold)),
+                      Text(widget.userPhone,
+                          style: const TextStyle(color: Colors.grey)),
+                    ],
                   ),
                 ),
-                IconButton(
-                    icon: const Icon(Icons.send, color: Color(0xFF006A4E)),
-                    onPressed: () => _sendMessage(_msgCtrl.text)),
+                const Padding(
+                  padding: EdgeInsets.all(14),
+                  child: Text('المنشورات',
+                      style:
+                          TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                ),
+                ..._userPosts.map((p) => Card(
+                      margin: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 6),
+                      child: Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(p['content'] ?? ''),
+                            if ((p['media_url'] ?? '')
+                                .toString()
+                                .startsWith('http')) ...[
+                              const SizedBox(height: 8),
+                              Image.network(p['media_url'],
+                                  width: double.infinity, fit: BoxFit.cover),
+                            ],
+                          ],
+                        ),
+                      ),
+                    )),
               ],
             ),
-          ),
-        ],
-      ),
     );
   }
 }
@@ -921,11 +1568,12 @@ class SocialFeedTab extends StatefulWidget {
   State createState() => _SocialFeedTabState();
 }
 
-class _SocialFeedTabState extends State {
+class _SocialFeedTabState extends State<SocialFeedTab> {
   List _posts = [];
+  Map<String, String> _avatarsMap = {};
   String _myName = 'مستخدم EG Masr';
+  String _myAvatar = '';
   bool _loading = true;
-  SocialFeedTab get w => widget as SocialFeedTab;
 
   @override
   void initState() {
@@ -933,20 +1581,24 @@ class _SocialFeedTabState extends State {
     _loadFeed();
   }
 
-  Future _loadFeed() async {
+  Future<void> _loadFeed() async {
     try {
-      final me = await supabase
-          .from('profiles')
-          .select()
-          .eq('phone', w.currentUserPhone)
-          .maybeSingle();
-      if (me != null) _myName = me['full_name'] ?? _myName;
+      final profs = await supabase.from('profiles').select();
+      final avMap = <String, String>{};
+      for (var pr in profs) {
+        avMap[pr['phone'].toString()] = (pr['avatar_url'] ?? '').toString();
+        if (pr['phone'] == widget.currentUserPhone) {
+          _myName = pr['full_name'] ?? _myName;
+          _myAvatar = (pr['avatar_url'] ?? '').toString();
+        }
+      }
       final allPosts = await supabase
           .from('posts')
           .select()
           .order('created_at', ascending: false);
       if (mounted) {
         setState(() {
+          _avatarsMap = avMap;
           _posts = List.from(allPosts);
           _loading = false;
         });
@@ -956,7 +1608,7 @@ class _SocialFeedTabState extends State {
     }
   }
 
-  Future _uploadFileToSupabase(XFile file, String ext) async {
+  Future<String> _uploadFileToSupabase(XFile file, String ext) async {
     final bytes = await file.readAsBytes();
     final fileName = 'egmasr_${DateTime.now().millisecondsSinceEpoch}.$ext';
     for (final bucket in ['media', 'avatars']) {
@@ -980,1719 +1632,13 @@ class _SocialFeedTabState extends State {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSt) => AlertDialog(
-          title: const Text('منشور جديد في الموجز'),
+          title: const Text('إنشاء منشور'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               TextField(
                   controller: contentCtrl,
                   maxLines: 3,
-                  decoration: const InputDecoration(hintText: 'اكتب منشورك...')),
-              const SizedBox(height: 10),
-              if (uploading) const CircularProgressIndicator(),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: uploading
-                          ? null
-                          : () async {
-                              final img = await picker.pickImage(
-                                  source: ImageSource.gallery,
-                                  imageQuality: 75);
-                              if (img != null) {
-                                setSt(() => uploading = true);
-                                final url =
-                                    await _uploadFileToSupabase(img, 'jpg');
-                                setSt(() {
-                                  uploading = false;
-                                  if (url.isNotEmpty) {
-                                    uploadedUrl = url;
-                                    mediaType = 'image';
-                                  }
-                                });
-                              }
-                            },
-                      icon: const Icon(Icons.image),
-                      label: const Text('صورة'),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: uploading
-                          ? null
-                          : () async {
-                              final vid = await picker.pickVideo(
-                                  source: ImageSource.gallery);
-                              if (vid != null) {
-                                setSt(() => uploading = true);
-                                final url =
-                                    await _uploadFileToSupabase(vid, 'mp4');
-                                setSt(() {
-                                  uploading = false;
-                                  if (url.isNotEmpty) {
-                                    uploadedUrl = url;
-                                    mediaType = 'video';
-                                  }
-                                });
-                              }
-                            },
-                      icon: const Icon(Icons.video_library),
-                      label: const Text('فيديو'),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('إلغاء')),
-            ElevatedButton(
-              onPressed: () async {
-                if (contentCtrl.text.trim().isEmpty && uploadedUrl.isEmpty) {
-                  return;
-                }
-                Navigator.pop(ctx);
-                await supabase.from('posts').insert({
-                  'author_phone': w.currentUserPhone,
-                  'author_name': _myName,
-                  'content': SecurityShield.sanitize(contentCtrl.text),
-                  'media_url': uploadedUrl,
-                  'media_type': mediaType,
-                  'privacy': 'public',
-                  'likes': [],
-                  'comments': [],
-                });
-                _loadFeed();
-              },
-              child: const Text('نشر'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('موجز EG MASR')),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : ListView.builder(
-              padding: const EdgeInsets.all(12),
-              itemCount: _posts.length,
-              itemBuilder: (_, i) {
-                final p = _posts[i];
-                final mediaUrl = (p['media_url'] ?? '').toString();
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(p['author_name'] ?? '',
-                            style:
-                                const TextStyle(fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 6),
-                        if ((p['content'] ?? '').toString().isNotEmpty)
-                          Text(p['content']),
-                        if (p['media_type'] == 'image' &&
-                            mediaUrl.startsWith('http')) ...[
-                          const SizedBox(height: 8),
-                          Image.network(mediaUrl,
-                              width: double.infinity, fit: BoxFit.cover),
-                        ] else if (p['media_type'] == 'video' &&
-                            mediaUrl.startsWith('http')) ...[
-                          const SizedBox(height: 8),
-                          ElevatedButton.icon(
-                            onPressed: () => launchUrl(Uri.parse(mediaUrl),
-                                mode: LaunchMode.externalApplication),
-                            icon: const Icon(Icons.play_arrow),
-                            label: const Text('تشغيل الفيديو'),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
-      floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: const Color(0xFF006A4E),
-        foregroundColor: Colors.white,
-        onPressed: _openCreatePostDialog,
-        icon: const Icon(Icons.add_a_photo),
-        label: const Text('نشر بالموجز'),
-      ),
-    );
-  }
-}
-
-class DirectPayAndQrTab extends StatefulWidget {
-  final String currentUserPhone;
-  final bool isAdmin;
-  final bool isCorporate;
-  const DirectPayAndQrTab(
-      {super.key,
-      required this.currentUserPhone,
-      required this.isAdmin,
-      required this.isCorporate});
-  @override
-  State createState() => _DirectPayAndQrTabState();
-}
-
-class _DirectPayAndQrTabState extends State {
-  String _linkedAccount = '';
-  String _uniqueQrToken = '';
-  double _egMasrBalance = 0.0;
-  DirectPayAndQrTab get w => widget as DirectPayAndQrTab;
-
-  @override
-  void initState() {
-    super.initState();
-    _initData();
-  }
-
-  Future _initData() async {
-    final prefs = await SharedPreferences.getInstance();
-    _linkedAccount =
-        prefs.getString('direct_linked_${w.currentUserPhone}') ?? '';
-    String? savedQr = prefs.getString('unique_qr_${w.currentUserPhone}');
-    if (savedQr == null || savedQr.isEmpty) {
-      final hash = SecurityShield.signSession(
-              w.currentUserPhone, DateTime.now().toIso8601String())
-          .substring(0, 12)
-          .toUpperCase();
-      final prefix = w.isCorporate ? 'EGMASR-CORP' : 'EGMASR-USER';
-      savedQr = '$prefix-${w.currentUserPhone}-$hash';
-      await prefs.setString('unique_qr_${w.currentUserPhone}', savedQr);
-    }
-    try {
-      final prof = await supabase
-          .from('profiles')
-          .select()
-          .eq('phone', w.currentUserPhone)
-          .maybeSingle();
-      if (prof != null) _egMasrBalance = (prof['balance'] ?? 0).toDouble();
-    } catch (_) {}
-    if (mounted) setState(() => _uniqueQrToken = savedQr!);
-  }
-
-  void _openLinkDialog() {
-    final numCtrl = TextEditingController();
-    String provider = 'فودافون كاش (Vodafone Cash)';
-    final providers = [
-      'فودافون كاش (Vodafone Cash)',
-      'اتصالات كاش (e& Money)',
-      'أورانج كاش (Orange Cash)',
-      'فيزا / ماستركارد / ميزة',
-      'محفظة EG MASR الإلكترونية',
-    ];
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSt) => AlertDialog(
-          title: const Text('ربط وسيلة الدفع الإلكتروني'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              DropdownButtonFormField(
-                value: provider,
-                isExpanded: true,
-                items: providers
-                    .map((p) => DropdownMenuItem(value: p, child: Text(p)))
-                    .toList(),
-                onChanged: (v) {
-                  if (v != null) setSt(() => provider = v.toString());
-                },
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: numCtrl,
-                keyboardType: TextInputType.number,
-                decoration:
-                    const InputDecoration(labelText: 'رقم المحفظة أو البطاقة'),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('إلغاء')),
-            ElevatedButton(
-              onPressed: () async {
-                final clean = numCtrl.text.trim();
-                if (clean.length < 11) return;
-                Navigator.pop(ctx);
-                final label =
-                    '$provider (****${clean.substring(clean.length - 4)})';
-                final prefs = await SharedPreferences.getInstance();
-                await prefs.setString(
-                    'direct_linked_${w.currentUserPhone}', label);
-                setState(() => _linkedAccount = label);
-              },
-              child: const Text('تأكيد الربط'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(w.isCorporate
-            ? 'حساب الشركة والباركود'
-            : 'الدفع الإلكتروني والباركود'),
-        actions: [
-          if (w.isAdmin)
-            IconButton(
-              icon: const Icon(Icons.admin_panel_settings,
-                  color: Color(0xFFD4AF37)),
-              onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (_) => const AdminGovernanceScreen())),
-            ),
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: () async {
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.clear();
-              if (mounted) {
-                Navigator.pushReplacement(context,
-                    MaterialPageRoute(builder: (_) => const AuthGate()));
-              }
-            },
-          ),
-        ],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          if (w.isAdmin)
-            Card(
-              color: const Color(0xFFD4AF37),
-              child: ListTile(
-                leading: const Icon(Icons.admin_panel_settings,
-                    color: Colors.black),
-                title: const Text('لوحة تحكم الأدمن (اعتماد الشركات)',
-                    style: TextStyle(fontWeight: FontWeight.bold)),
-                onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (_) => const AdminGovernanceScreen())),
-              ),
-            ),
-          Card(
-            color: const Color(0xFF006A4E),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                children: [
-                  Text(
-                    w.isCorporate ? 'حساب شركة معتمد' : 'حساب شخصي مؤمّن',
-                    style: const TextStyle(
-                        color: Color(0xFFD4AF37), fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 6),
-                  Text('رصيد محفظة EG MASR: $_egMasrBalance ج.م',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold)),
-                  const Divider(color: Colors.white24, height: 22),
-                  Text(
-                    _linkedAccount.isEmpty
-                        ? 'اربط فودافون / اتصالات / أورانج كاش أو فيزا للدفع المباشر'
-                        : 'وسيلة الدفع المربوطة:\n$_linkedAccount',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.white70, fontSize: 13),
-                  ),
-                  const SizedBox(height: 12),
-                  ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFD4AF37),
-                        foregroundColor: Colors.black),
-                    onPressed: _openLinkDialog,
-                    icon: const Icon(Icons.account_balance_wallet),
-                    label: const Text('ربط محفظة إلكترونية / فيزا'),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          Card(
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  Text(
-                      w.isCorporate
-                          ? 'الباركود الفريد الخاص بالشركة'
-                          : 'الباركود الفريد الخاص بك (غير قابل للتكرار)',
-                      style: const TextStyle(fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
-                  if (_uniqueQrToken.isNotEmpty)
-                    QrImageView(data: _uniqueQrToken, size: 170),
-                  Text(_uniqueQrToken,
-                      style: const TextStyle(fontSize: 10, color: Colors.grey)),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-
-    class AdminGovernanceScreen extends StatefulWidget {
-  const AdminGovernanceScreen({super.key});
-  @override
-  State createState() => _AdminGovernanceScreenState();
-}
-
-class _AdminGovernanceScreenState extends State {
-  List _companies = [];
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future _load() async {
-    final comps = await supabase
-        .from('companies')
-        .select()
-        .order('created_at', ascending: false);
-    if (mounted) setState(() => _companies = List.from(comps));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('اعتماد الشركات (Admin)')),
-      body: ListView.builder(
-        padding: const EdgeInsets.all(12),
-        itemCount: _companies.length,
-        itemBuilder: (_, i) {
-          final c = _companies[i];
-          return Card(
-            child: ListTile(
-              title: Text(c['company_name'] ?? ''),
-              subtitle: Text(
-                  'موبايل: ${c['phone']} | ضريبي: ${c['tax_id']}\nالحالة: ${c['status']}'),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.check_circle, color: Colors.green),
-                    onPressed: () async {
-                      await supabase
-                          .from('companies')
-                          .update({'status': 'approved'}).eq('id', c['id']);
-                      _load();
-                    },
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.cancel, color: Colors.red),
-                    onPressed: () async {
-                      await supabase
-                          .from('companies')
-                          .update({'status': 'rejected'}).eq('id', c['id']);
-                      _load();
-                    },
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-class ServicesTab extends StatelessWidget {
-  final String currentUserPhone;
-  final bool isCorporate;
-  const ServicesTab(
-      {super.key, required this.currentUserPhone, required this.isCorporate});
-
-  @override
-  Widget build(BuildContext context) {
-    final places = [
-      {
-        'name': 'مطعم صبحي كابر (Sobhy Kaber)',
-        'type': 'مطعم مشويات وطواجن',
-        'address': '151 شارع عبيد، روض الفرج، شبرا، القاهرة',
-        'officialUrl': 'https://www.google.com/search?q=مطعم+صبحي+كابر+الرسمي',
-      },
-      {
-        'name': 'مطعم قصر الكبابجي (Qasr El Kababgi)',
-        'type': 'مطعم مشويات ملكي',
-        'address': 'التجمع الخامس / الشيخ زايد',
-        'officialUrl': 'https://www.google.com/search?q=مطعم+قصر+الكبابجي+الرسمي',
-      },
-      {
-        'name': 'كافيه سيلانترو (Cilantro Cafe)',
-        'type': 'كافيه ومشروبات',
-        'address': 'الزمالك / المعادي / مصر الجديدة',
-        'officialUrl': 'https://www.google.com/search?q=Cilantro+Cafe+Egypt+official',
-      },
-      {
-        'name': 'فندق فيرمونت نايل سيتي (Fairmont Nile City)',
-        'type': 'فندق 5 نجوم على النيل',
-        'address': 'كورنيش النيل، القاهرة',
-        'officialUrl': 'https://www.google.com/search?q=Fairmont+Nile+City+official',
-      },
-    ];
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('أوبر والتوصيل والخدمات')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                  colors: [Color(0xFF004D38), Color(0xFF006A4E)]),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('مشاوير أوبر ونقل البضائع والطلبات',
-                    style: TextStyle(
-                        color: Color(0xFFD4AF37),
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold)),
-                const SizedBox(height: 6),
-                const Text(
-                  'تتبع لحظي GPS • تسعيرة أوبر للملاكي والموتوسيكل • اتفاق مباشر للربع نقل والجامبو • تقييم الرحلة',
-                  style: TextStyle(color: Colors.white70, fontSize: 12),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFD4AF37),
-                            foregroundColor: Colors.black),
-                        onPressed: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => UberRideAndCargoScreen(
-                                customerPhone: currentUserPhone,
-                                initialMode: 'ride'),
-                          ),
-                        ),
-                        icon: const Icon(Icons.local_taxi),
-                        label: const Text('اطلب مشوار (أوبر)'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.white,
-                            foregroundColor: const Color(0xFF006A4E)),
-                        onPressed: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => UberRideAndCargoScreen(
-                                customerPhone: currentUserPhone,
-                                initialMode: 'cargo'),
-                          ),
-                        ),
-                        icon: const Icon(Icons.local_shipping),
-                        label: const Text('طلبات / ربع نقل / جامبو'),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.white,
-                            side: const BorderSide(color: Colors.white54)),
-                        onPressed: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => CaptainUberPortalScreen(
-                                  captainPhone: currentUserPhone)),
-                        ),
-                        icon: const Icon(Icons.badge),
-                        label: const Text('سجّل ككابتن (أوبر)'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        style: OutlinedButton.styleFrom(
-                            foregroundColor: const Color(0xFFD4AF37),
-                            side: const BorderSide(color: Color(0xFFD4AF37))),
-                        onPressed: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => LiveTripTrackingScreen(
-                                  userPhone: currentUserPhone)),
-                        ),
-                        icon: const Icon(Icons.my_location),
-                        label: const Text('متابعة رحلتي GPS'),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          if (isCorporate) ...[
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFFF8E1),
-                border: Border.all(color: const Color(0xFFD4AF37), width: 2),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Row(
-                    children: [
-                      Icon(Icons.directions_bus,
-                          color: Color(0xFF004D38), size: 28),
-                      SizedBox(width: 8),
-                      Text('تابع الباص (خدمة حصرية للشركات)',
-                          style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                              color: Color(0xFF004D38))),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  const Text(
-                    'سجّل خطوط باصات الموظفين ومحطات الدائري والطرق، وتابع موقع الباص لحظة بلحظة مع إشعار فوري عند تخطي كل محطة.',
-                    style: TextStyle(fontSize: 12, color: Colors.black87),
-                  ),
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF004D38),
-                          foregroundColor: const Color(0xFFD4AF37)),
-                      onPressed: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (_) => CorporateBusTrackerScreen(
-                                companyPhone: currentUserPhone)),
-                      ),
-                      icon: const Icon(Icons.route),
-                      label: const Text('إدارة ومتابعة باصات الموظفين الآن'),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-          const SizedBox(height: 18),
-          const Text('الفنادق والمطاعم والكافيهات (معاينة رسمية وحجز داخلي)',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 8),
-          ...places.map((p) => Card(
-                margin: const EdgeInsets.only(bottom: 12),
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(p['name']!,
-                          style: const TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.bold)),
-                      Text('${p['type']} • ${p['address']}',
-                          style: const TextStyle(
-                              fontSize: 12, color: Colors.grey)),
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: () => launchUrl(
-                                  Uri.parse(p['officialUrl']!),
-                                  mode: LaunchMode.externalApplication),
-                              icon: const Icon(Icons.public, size: 18),
-                              label: const Text('معاينة الصفحة الرسمية'),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              style: ElevatedButton.styleFrom(
-                                  backgroundColor: const Color(0xFF006A4E),
-                                  foregroundColor: Colors.white),
-                              onPressed: () => _openInAppBookingDialog(
-                                  context, p['name']!),
-                              icon: const Icon(Icons.bookmark_add, size: 18),
-                              label: const Text('احجز من التطبيق'),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              )),
-        ],
-      ),
-    );
-  }
-
-  void _openInAppBookingDialog(BuildContext context, String placeName) {
-    final guestsCtrl = TextEditingController(text: '2');
-    DateTime date = DateTime.now().add(const Duration(days: 1));
-    TimeOfDay time = const TimeOfDay(hour: 20, minute: 0);
-    String payMethod = 'فودافون كاش / إلكتروني';
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSt) => AlertDialog(
-          title: Text('حجز داخلي: $placeName'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: guestsCtrl,
-                  keyboardType: TextInputType.number,
                   decoration: const InputDecoration(
-                      labelText: 'عدد الأفراد / الغرف',
-                      prefixIcon: Icon(Icons.people)),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.calendar_today),
-                  title: Text('التاريخ: ${date.year}-${date.month}-${date.day}'),
-                  onTap: () async {
-                    final d = await showDatePicker(
-                      context: ctx,
-                      initialDate: date,
-                      firstDate: DateTime.now(),
-                      lastDate: DateTime.now().add(const Duration(days: 180)),
-                    );
-                    if (d != null) setSt(() => date = d);
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.access_time),
-                  title: Text('الساعة: ${time.format(ctx)}'),
-                  onTap: () async {
-                    final t =
-                        await showTimePicker(context: ctx, initialTime: time);
-                    if (t != null) setSt(() => time = t);
-                  },
-                ),
-                DropdownButtonFormField(
-                  value: payMethod,
-                  items: const [
-                    DropdownMenuItem(
-                        value: 'فودافون كاش / إلكتروني',
-                        child: Text('محفظة إلكترونية / فيزا')),
-                    DropdownMenuItem(
-                        value: 'محفظة EG MASR', child: Text('محفظة EG MASR')),
-                    DropdownMenuItem(
-                        value: 'دفع نقدي عند الوصول',
-                        child: Text('دفع نقدي (Cash)')),
-                  ],
-                  onChanged: (v) {
-                    if (v != null) setSt(() => payMethod = v.toString());
-                  },
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('إلغاء')),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF006A4E),
-                  foregroundColor: Colors.white),
-              onPressed: () async {
-                Navigator.pop(ctx);
-                final ref = 'BKG-${Random().nextInt(89999) + 10000}';
-                await supabase.from('transactions').insert({
-                  'ref_code': ref,
-                  'sender_phone': currentUserPhone,
-                  'receiver_phone': placeName,
-                  'amount': 0.0,
-                  'tx_type': 'booking',
-                  'note':
-                      'حجز $placeName (${guestsCtrl.text} أفراد) يوم ${date.day}/${date.month} - $payMethod',
-                });
-                if (context.mounted) {
-                  showDialog(
-                    context: context,
-                    builder: (c) => AlertDialog(
-                      title: const Text('تم تأكيد حجزك بنجاح'),
-                      content: Text(
-                          'المكان: $placeName\nالتاريخ: ${date.day}/${date.month}/${date.year}\nالدفع: $payMethod\nرقم الحجز: #$ref'),
-                      actions: [
-                        ElevatedButton(
-                            onPressed: () => Navigator.pop(c),
-                            child: const Text('تم'))
-                      ],
-                    ),
-                  );
-                }
-              },
-              child: const Text('تأكيد الحجز الآن'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class UberRideAndCargoScreen extends StatefulWidget {
-  final String customerPhone;
-  final String initialMode;
-  const UberRideAndCargoScreen(
-      {super.key, required this.customerPhone, required this.initialMode});
-  @override
-  State createState() => _UberRideAndCargoScreenState();
-}
-
-class _UberRideAndCargoScreenState extends State {
-  String _vehicle = 'car';
-  final _pickupCtrl = TextEditingController();
-  final _dropoffCtrl = TextEditingController();
-  final _offerPriceCtrl = TextEditingController();
-  final _notesCtrl = TextEditingController();
-  String _paymentMethod = 'cash';
-  double? _pickupLat;
-  double? _pickupLng;
-  double _distanceKm = 6.5;
-
-  UberRideAndCargoScreen get w => widget as UberRideAndCargoScreen;
-
-  @override
-  void initState() {
-    super.initState();
-    _vehicle = w.initialMode == 'cargo' ? 'quarter_truck' : 'car';
-    _detectMyGpsLocation();
-  }
-
-  Future _detectMyGpsLocation() async {
-    try {
-      LocationPermission perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied) {
-        perm = await Geolocator.requestPermission();
-      }
-      final pos = await Geolocator.getCurrentPosition();
-      _pickupLat = pos.latitude;
-      _pickupLng = pos.longitude;
-      String addr =
-          'موقعي الحالي (${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)})';
-      try {
-        final marks =
-            await placemarkFromCoordinates(pos.latitude, pos.longitude);
-        if (marks.isNotEmpty) {
-          addr =
-              '${marks.first.street ?? ''}, ${marks.first.subLocality ?? ''}, ${marks.first.locality ?? ''}';
-        }
-      } catch (_) {}
-      if (mounted) setState(() => _pickupCtrl.text = addr);
-    } catch (_) {}
-  }
-
-  double _calculateUberPrice() {
-    if (_vehicle == 'motorcycle') return 12.0 + (_distanceKm * 4.5);
-    if (_vehicle == 'car') return 20.0 + (_distanceKm * 8.0);
-    return double.tryParse(_offerPriceCtrl.text.trim()) ?? 0.0;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isNegotiated =
-        _vehicle == 'quarter_truck' || _vehicle == 'jumbo_truck';
-    final estPrice = _calculateUberPrice();
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('اطلب رحلة أو نقل بضائع')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              ChoiceChip(
-                label: const Text('موتوسيكل (تسعيرة أوبر)'),
-                selected: _vehicle == 'motorcycle',
-                onSelected: (_) => setState(() => _vehicle = 'motorcycle'),
-              ),
-              ChoiceChip(
-                label: const Text('سيارة ملاكي (تسعيرة أوبر)'),
-                selected: _vehicle == 'car',
-                onSelected: (_) => setState(() => _vehicle = 'car'),
-              ),
-              ChoiceChip(
-                label: const Text('ربع نقل (باتفاق)'),
-                selected: _vehicle == 'quarter_truck',
-                onSelected: (_) => setState(() => _vehicle = 'quarter_truck'),
-              ),
-              ChoiceChip(
-                label: const Text('نقل جامبو (باتفاق)'),
-                selected: _vehicle == 'jumbo_truck',
-                onSelected: (_) => setState(() => _vehicle = 'jumbo_truck'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          TextField(
-            controller: _pickupCtrl,
-            decoration: InputDecoration(
-              labelText: 'موقع الانطلاق / التحميل',
-              prefixIcon: const Icon(Icons.my_location, color: Colors.green),
-              suffixIcon: IconButton(
-                icon: const Icon(Icons.gps_fixed),
-                onPressed: _detectMyGpsLocation,
-              ),
-              border:
-                  OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _dropoffCtrl,
-            decoration: InputDecoration(
-              labelText: 'موقع الوصول / التفريغ',
-              prefixIcon: const Icon(Icons.location_on, color: Colors.red),
-              border:
-                  OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-            ),
-          ),
-          const SizedBox(height: 12),
-          if (!isNegotiated) ...[
-            Row(
-              children: [
-                const Text('المسافة (كم): '),
-                Expanded(
-                  child: Slider(
-                    value: _distanceKm,
-                    min: 1,
-                    max: 60,
-                    divisions: 59,
-                    onChanged: (v) => setState(() => _distanceKm = v),
-                  ),
-                ),
-                Text('${_distanceKm.toStringAsFixed(1)} كم'),
-              ],
-            ),
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                  color: const Color(0xFFE8F5E9),
-                  borderRadius: BorderRadius.circular(14)),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text('التعريفة المقدرة:',
-                      style: TextStyle(fontWeight: FontWeight.bold)),
-                  Text('${estPrice.toStringAsFixed(1)} ج.م',
-                      style: const TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF006A4E))),
-                ],
-              ),
-            ),
-          ] else ...[
-            TextField(
-              controller: _offerPriceCtrl,
-              keyboardType: TextInputType.number,
-              decoration: InputDecoration(
-                labelText: 'اقترح السعر للاتفاق مع الكابتن (ج.م)',
-                prefixIcon: const Icon(Icons.handshake),
-                border:
-                    OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-              ),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: _notesCtrl,
-              decoration: InputDecoration(
-                labelText: 'وصف الحمولة / الطلبات',
-                prefixIcon: const Icon(Icons.inventory),
-                border:
-                    OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-              ),
-            ),
-          ],
-          const SizedBox(height: 14),
-          DropdownButtonFormField(
-            value: _paymentMethod,
-            decoration: InputDecoration(
-              labelText: 'طريقة الدفع',
-              prefixIcon: const Icon(Icons.payment),
-              border:
-                  OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-            ),
-            items: const [
-              DropdownMenuItem(value: 'cash', child: Text('دفع نقدي (Cash)')),
-              DropdownMenuItem(
-                  value: 'vodafone_cash', child: Text('فودافون كاش')),
-              DropdownMenuItem(
-                  value: 'etisalat_cash', child: Text('اتصالات كاش')),
-              DropdownMenuItem(
-                  value: 'orange_cash', child: Text('أورانج كاش')),
-              DropdownMenuItem(value: 'visa', child: Text('فيزا / ماستركارد')),
-              DropdownMenuItem(
-                  value: 'egmasr_wallet', child: Text('محفظة EG MASR')),
-            ],
-            onChanged: (v) {
-              if (v != null) setState(() => _paymentMethod = v.toString());
-            },
-          ),
-          const SizedBox(height: 18),
-          SizedBox(
-            height: 52,
-            child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF006A4E),
-                  foregroundColor: Colors.white),
-              onPressed: () async {
-                if (_pickupCtrl.text.trim().isEmpty ||
-                    _dropoffCtrl.text.trim().isEmpty) {
-                  return;
-                }
-                final code = 'EGM-${Random().nextInt(89999) + 10000}';
-                await supabase.from('delivery_orders').insert({
-                  'order_code': code,
-                  'customer_phone': w.customerPhone,
-                  'service_type': isNegotiated ? 'cargo' : 'ride',
-                  'vehicle_type': _vehicle,
-                  'pickup_location': _pickupCtrl.text.trim(),
-                  'dropoff_location': _dropoffCtrl.text.trim(),
-                  'pickup_lat': _pickupLat,
-                  'pickup_lng': _pickupLng,
-                  'details': _notesCtrl.text.trim(),
-                  'price': estPrice,
-                  'payment_method': _paymentMethod,
-                  'status': 'searching',
-                });
-                if (mounted) {
-                  Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(
-                        builder: (_) => LiveTripTrackingScreen(
-                            userPhone: w.customerPhone)),
-                  );
-                }
-              },
-              icon: const Icon(Icons.check_circle),
-              label: Text(isNegotiated
-                  ? 'إرسال طلب النقل والاتفاق الآن'
-                  : 'تأكيد الرحلة (${estPrice.toStringAsFixed(1)} ج.م)'),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class LiveTripTrackingScreen extends StatefulWidget {
-  final String userPhone;
-  const LiveTripTrackingScreen({super.key, required this.userPhone});
-  @override
-  State createState() => _LiveTripTrackingScreenState();
-}
-
-class _LiveTripTrackingScreenState extends State {
-  List _orders = [];
-  LiveTripTrackingScreen get w => widget as LiveTripTrackingScreen;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future _load() async {
-    final res = await supabase
-        .from('delivery_orders')
-        .select()
-        .eq('customer_phone', w.userPhone)
-        .order('created_at', ascending: false);
-    if (mounted) setState(() => _orders = List.from(res));
-  }
-
-  void _rateTripDialog(Map order) {
-    int stars = 5;
-    final commentCtrl = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSt) => AlertDialog(
-          title: const Text('قيّم رحلتك مع الكابتن'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(
-                  5,
-                  (idx) => IconButton(
-                    icon: Icon(idx < stars ? Icons.star : Icons.star_border,
-                        color: const Color(0xFFD4AF37), size: 32),
-                    onPressed: () => setSt(() => stars = idx + 1),
-                  ),
-                ),
-              ),
-              TextField(
-                  controller: commentCtrl,
-                  decoration:
-                      const InputDecoration(hintText: 'اكتب ملاحظاتك...')),
-            ],
-          ),
-          actions: [
-            ElevatedButton(
-              onPressed: () async {
-                Navigator.pop(ctx);
-                await supabase.from('delivery_orders').update({
-                  'rating': stars,
-                  'rating_comment': commentCtrl.text.trim(),
-                }).eq('id', order['id']);
-                _load();
-              },
-              child: const Text('إرسال التقييم'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('المتابعة اللحظية للرحلة GPS'),
-        actions: [IconButton(icon: const Icon(Icons.refresh), onPressed: _load)],
-      ),
-      body: ListView.builder(
-        padding: const EdgeInsets.all(14),
-        itemCount: _orders.length,
-        itemBuilder: (_, i) {
-          final o = _orders[i];
-          final st = o['status'] ?? 'searching';
-          final capLat = o['captain_lat'];
-          final capLng = o['captain_lng'];
-          return Card(
-            margin: const EdgeInsets.only(bottom: 12),
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                      '${o['order_code']} • السعر: ${o['price'] == 0 ? 'باتفاق' : '${o['price']} ج.م'}',
-                      style: const TextStyle(fontWeight: FontWeight.bold)),
-                  Text('من: ${o['pickup_location']}'),
-                  Text('إلى: ${o['dropoff_location']}'),
-                  const Divider(),
-                  Text(
-                    st == 'searching'
-                        ? 'جاري البحث عن أقرب كابتن...'
-                        : st == 'on_the_way'
-                            ? 'الكابتن في الطريق إليك (${o['captain_phone']})'
-                            : 'وصلت بالسلامة',
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold, color: Color(0xFF006A4E)),
-                  ),
-                  if (capLat != null && capLng != null)
-                    TextButton.icon(
-                      onPressed: () => launchUrl(
-                          Uri.parse(
-                              'https://www.google.com/maps/search/?api=1&query=$capLat,$capLng'),
-                          mode: LaunchMode.externalApplication),
-                      icon: const Icon(Icons.map, color: Colors.red),
-                      label: const Text('شاهد موقع الكابتن المباشر على الخريطة'),
-                    ),
-                  if (st == 'delivered' && (o['rating'] ?? 0) == 0)
-                    ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFFD4AF37),
-                          foregroundColor: Colors.black),
-                      onPressed: () => _rateTripDialog(o),
-                      icon: const Icon(Icons.star),
-                      label: const Text('قيّم الرحلة الآن'),
-                    ),
-                  if ((o['rating'] ?? 0) > 0)
-                    Text('تقييمك: ${o['rating']} نجوم'),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-class CaptainUberPortalScreen extends StatefulWidget {
-  final String captainPhone;
-  const CaptainUberPortalScreen({super.key, required this.captainPhone});
-  @override
-  State createState() => _CaptainUberPortalScreenState();
-}
-
-class _CaptainUberPortalScreenState extends State {
-  final _nameCtrl = TextEditingController();
-  final _plateCtrl = TextEditingController();
-  final _licenseCtrl = TextEditingController();
-  String _vehicle = 'car';
-  Map? _captain;
-  List _orders = [];
-  CaptainUberPortalScreen get w => widget as CaptainUberPortalScreen;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future _load() async {
-    final cap = await supabase
-        .from('captains')
-        .select()
-        .eq('phone', w.captainPhone)
-        .maybeSingle();
-    final ords = await supabase
-        .from('delivery_orders')
-        .select()
-        .order('created_at', ascending: false);
-    if (mounted) {
-      setState(() {
-        _captain = cap;
-        _orders = List.from(ords);
-      });
-    }
-  }
-
-  Future _broadcastMyLocation(String orderId) async {
-    try {
-      LocationPermission perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied) {
-        perm = await Geolocator.requestPermission();
-      }
-      final pos = await Geolocator.getCurrentPosition();
-      await supabase.from('delivery_orders').update({
-        'captain_lat': pos.latitude,
-        'captain_lng': pos.longitude,
-      }).eq('id', orderId);
-    } catch (_) {}
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('بوابة الكابتن (أوبر / نقل)')),
-      body: _captain == null
-          ? ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                const Text('سجّل ككابتن معتمد في EG MASR:',
-                    style:
-                        TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 10),
-                TextField(
-                    controller: _nameCtrl,
-                    decoration:
-                        const InputDecoration(labelText: 'اسم الكابتن بالكامل')),
-                DropdownButtonFormField(
-                  value: _vehicle,
-                  items: const [
-                    DropdownMenuItem(
-                        value: 'motorcycle', child: Text('موتوسيكل')),
-                    DropdownMenuItem(value: 'car', child: Text('سيارة ملاكي')),
-                    DropdownMenuItem(
-                        value: 'quarter_truck', child: Text('سيارة ربع نقل')),
-                    DropdownMenuItem(
-                        value: 'jumbo_truck', child: Text('سيارة نقل جامبو')),
-                  ],
-                  onChanged: (v) {
-                    if (v != null) setState(() => _vehicle = v.toString());
-                  },
-                ),
-                TextField(
-                    controller: _plateCtrl,
-                    decoration: const InputDecoration(labelText: 'رقم اللوحة')),
-                TextField(
-                    controller: _licenseCtrl,
-                    decoration:
-                        const InputDecoration(labelText: 'رقم رخصة القيادة')),
-                const SizedBox(height: 16),
-                ElevatedButton(
-                  onPressed: () async {
-                    if (_nameCtrl.text.isEmpty || _plateCtrl.text.isEmpty) {
-                      return;
-                    }
-                    await supabase.from('captains').insert({
-                      'phone': w.captainPhone,
-                      'full_name': _nameCtrl.text.trim(),
-                      'vehicle_type': _vehicle,
-                      'plate_number': _plateCtrl.text.trim(),
-                      'license_number': _licenseCtrl.text.trim(),
-                    });
-                    _load();
-                  },
-                  child: const Text('تفعيل حساب الكابتن'),
-                ),
-              ],
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.all(12),
-              itemCount: _orders.length,
-              itemBuilder: (_, i) {
-                final o = _orders[i];
-                return Card(
-                  child: ListTile(
-                    title: Text(
-                        '${o['order_code']} (${o['vehicle_type']}) • ${o['price']} ج.م'),
-                    subtitle: Text(
-                        'من: ${o['pickup_location']}\nإلى: ${o['dropoff_location']}\nالحالة: ${o['status']}'),
-                    trailing: ElevatedButton(
-                      onPressed: () async {
-                        final next = o['status'] == 'searching'
-                            ? 'on_the_way'
-                            : 'delivered';
-                        await supabase.from('delivery_orders').update({
-                          'captain_phone': w.captainPhone,
-                          'status': next,
-                        }).eq('id', o['id']);
-                        await _broadcastMyLocation(o['id'].toString());
-                        _load();
-                      },
-                      child: Text(o['status'] == 'searching'
-                          ? 'قبول'
-                          : o['status'] == 'on_the_way'
-                              ? 'إنهاء'
-                              : 'تم'),
-                    ),
-                  ),
-                );
-              },
-            ),
-    );
-  }
-}
-
-class CorporateBusTrackerScreen extends StatefulWidget {
-  final String companyPhone;
-  const CorporateBusTrackerScreen({super.key, required this.companyPhone});
-  @override
-  State createState() => _CorporateBusTrackerScreenState();
-}
-
-class _CorporateBusTrackerScreenState extends State {
-  List _buses = [];
-  CorporateBusTrackerScreen get w => widget as CorporateBusTrackerScreen;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadBuses();
-  }
-
-  Future _loadBuses() async {
-    try {
-      final res = await supabase
-          .from('company_buses')
-          .select()
-          .eq('company_phone', w.companyPhone)
-          .order('created_at', ascending: false);
-      if (mounted) setState(() => _buses = List.from(res));
-    } catch (_) {}
-  }
-
-  void _addBusDialog() {
-    final busNameCtrl = TextEditingController();
-    final routeCtrl = TextEditingController();
-    final driverCtrl = TextEditingController();
-    final startCtrl = TextEditingController(text: '07:30 ص');
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('إضافة خط باص موظفين جديد'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                  controller: busNameCtrl,
-                  decoration: const InputDecoration(
-                      labelText: 'اسم / رقم الباص (مثال: باص 1 - الدائري)')),
-              TextField(
-                  controller: routeCtrl,
-                  decoration: const InputDecoration(
-                      labelText: 'خط السير (من الانطلاق حتى مقر الشركة)')),
-              TextField(
-                  controller: driverCtrl,
-                  keyboardType: TextInputType.phone,
-                  decoration: const InputDecoration(labelText: 'موبايل السائق')),
-              TextField(
-                  controller: startCtrl,
-                  decoration:
-                      const InputDecoration(labelText: 'ميعاد الانطلاق')),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF006A4E),
-                foregroundColor: Colors.white),
-            onPressed: () async {
-              if (busNameCtrl.text.trim().isEmpty) return;
-              Navigator.pop(ctx);
-              await supabase.from('company_buses').insert({
-                'company_phone': w.companyPhone,
-                'bus_name': busNameCtrl.text.trim(),
-                'route_name': routeCtrl.text.trim(),
-                'driver_phone': driverCtrl.text.trim(),
-                'start_time': startCtrl.text.trim(),
-                'status': 'scheduled',
-              });
-              _loadBuses();
-            },
-            child: const Text('حفظ خط الباص'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('تابع الباص - إدارة خطوط الشركة'),
-        actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadBuses)
-        ],
-      ),
-      body: _buses.isEmpty
-          ? Center(
-              child: ElevatedButton.icon(
-                onPressed: _addBusDialog,
-                icon: const Icon(Icons.add),
-                label: const Text('أضف أول خط باص موظفين لشركتك'),
-              ),
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.all(14),
-              itemCount: _buses.length,
-              itemBuilder: (_, i) {
-                final b = _buses[i];
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  child: ListTile(
-                    leading: const CircleAvatar(
-                      backgroundColor: Color(0xFF004D38),
-                      child:
-                          Icon(Icons.directions_bus, color: Color(0xFFD4AF37)),
-                    ),
-                    title: Text('${b['bus_name']} (${b['start_time']})',
-                        style: const TextStyle(fontWeight: FontWeight.bold)),
-                    subtitle: Text(
-                        'الخط: ${b['route_name']}\nآخر محطة: ${b['last_station_passed']}'),
-                    trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => BusStationsAndLiveScreen(
-                          bus: b,
-                          onUpdated: _loadBuses,
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-      floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: const Color(0xFF006A4E),
-        foregroundColor: Colors.white,
-        onPressed: _addBusDialog,
-        icon: const Icon(Icons.add),
-        label: const Text('إضافة خط باص'),
-      ),
-    );
-  }
-}
-
-class BusStationsAndLiveScreen extends StatefulWidget {
-  final Map bus;
-  final VoidCallback onUpdated;
-  const BusStationsAndLiveScreen(
-      {super.key, required this.bus, required this.onUpdated});
-  @override
-  State createState() => _BusStationsAndLiveScreenState();
-}
-
-class _BusStationsAndLiveScreenState extends State {
-  List _stations = [];
-  String _liveRoadName = '';
-  double? _lat;
-  double? _lng;
-  BusStationsAndLiveScreen get w => widget as BusStationsAndLiveScreen;
-
-  @override
-  void initState() {
-    super.initState();
-    _lat = w.bus['current_lat'];
-    _lng = w.bus['current_lng'];
-    _loadStations();
-  }
-
-  Future _loadStations() async {
-    final res = await supabase
-        .from('bus_stations')
-        .select()
-        .eq('bus_id', w.bus['id'])
-        .order('station_order', ascending: true);
-    if (mounted) setState(() => _stations = List.from(res));
-  }
-
-  void _addStationDialog() {
-    final stNameCtrl = TextEditingController();
-    final timeCtrl = TextEditingController(text: '07:45 ص');
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('إضافة محطة على خط السير'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: stNameCtrl,
-              decoration: const InputDecoration(
-                  labelText: 'اسم المحطة (مثال: الدائري - نزلة المنيب)'),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: timeCtrl,
-              decoration:
-                  const InputDecoration(labelText: 'ميعاد الوصول المحدد'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
-          ElevatedButton(
-            onPressed: () async {
-              if (stNameCtrl.text.trim().isEmpty) return;
-              Navigator.pop(ctx);
-              await supabase.from('bus_stations').insert({
-                'bus_id': w.bus['id'],
-                'station_name': stNameCtrl.text.trim(),
-                'scheduled_time': timeCtrl.text.trim(),
-                'station_order': _stations.length + 1,
-              });
-              _loadStations();
-            },
-            child: const Text('إضافة المحطة'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future _updateBusGpsLocation() async {
-    try {
-      LocationPermission perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied) {
-        perm = await Geolocator.requestPermission();
-      }
-      final pos = await Geolocator.getCurrentPosition();
-      String road =
-          'إحداثيات (${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)})';
-      try {
-        final marks =
-            await placemarkFromCoordinates(pos.latitude, pos.longitude);
-        if (marks.isNotEmpty) {
-          road =
-              '${marks.first.street ?? ''} - ${marks.first.subLocality ?? ''} - ${marks.first.locality ?? ''}';
-        }
-      } catch (_) {}
-
-      await supabase.from('company_buses').update({
-        'current_lat': pos.latitude,
-        'current_lng': pos.longitude,
-        'status': 'moving',
-      }).eq('id', w.bus['id']);
-
-      if (mounted) {
-        setState(() {
-          _lat = pos.latitude;
-          _lng = pos.longitude;
-          _liveRoadName = road;
-        });
-      }
-      w.onUpdated();
-    } catch (_) {}
-  }
-
-  Future _markStationPassed(Map station) async {
-    final nowStr =
-        '${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}';
-    await supabase.from('bus_stations').update({
-      'is_passed': true,
-      'passed_at': DateTime.now().toIso8601String(),
-    }).eq('id', station['id']);
-
-    final notice =
-        'تخطى محطة (${station['station_name']}) الساعة $nowStr (المقرر: ${station['scheduled_time']})';
-    await supabase
-        .from('company_buses')
-        .update({'last_station_passed': notice}).eq('id', w.bus['id']);
-
-    _loadStations();
-    w.onUpdated();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('إشعار لأدمن الشركة: الباص $notice'),
-          backgroundColor: const Color(0xFF006A4E),
-          duration: const Duration(seconds: 6),
-        ),
-      );
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('تتبع ${w.bus['bus_name']}')),
-      body: ListView(
-        padding: const EdgeInsets.all(14),
-        children: [
-          Card(
-            color: const Color(0xFF004D38),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('خط السير: ${w.bus['route_name']}',
-                      style: const TextStyle(
-                          color: Color(0xFFD4AF37),
-                          fontWeight: FontWeight.bold)),
-                  Text('ميعاد الانطلاق: ${w.bus['start_time']}',
-                      style: const TextStyle(color: Colors.white70)),
-                  if (_liveRoadName.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: Text('الموقع الحالي: $_liveRoadName',
-                          style: const TextStyle(color: Colors.white)),
-                    ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFFD4AF37),
-                              foregroundColor: Colors.black),
-                          onPressed: _updateBusGpsLocation,
-                          icon: const Icon(Icons.my_location),
-                          label: const Text('تحديث موقع الباص GPS'),
-                        ),
-                      ),
-                      if (_lat != null && _lng != null) ...[
-                        const SizedBox(width: 8),
-                        ElevatedButton.icon(
-                          onPressed: () => launchUrl(
-                              Uri.parse(
-                                  'https://www.google.com/maps/search/?api=1&query=$_lat,$_lng'),
-                              mode: LaunchMode.externalApplication),
-                          icon: const Icon(Icons.map),
-                          label: const Text('الخريطة'),
-                        ),
-                      ],
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 14),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text('محطات خط السير ومواعيد الوصول:',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
-              TextButton.icon(
-                onPressed: _addStationDialog,
-                icon: const Icon(Icons.add_location_alt),
-                label: const Text('إضافة محطة'),
-              ),
-            ],
-          ),
-          ..._stations.map((s) {
-            final passed = s['is_passed'] == true;
-            return Card(
-              color: passed ? const Color(0xFFE8F5E9) : null,
-              child: ListTile(
-                leading: Icon(
-                  passed ? Icons.check_circle : Icons.radio_button_unchecked,
-                  color: passed ? Colors.green : Colors.orange,
-                ),
-                title: Text(s['station_name'] ?? '',
-                    style: const TextStyle(fontWeight: FontWeight.bold)),
-                subtitle: Text('الميعاد المحدد: ${s['scheduled_time']}'),
-                trailing: passed
-                    ? const Text('تم العبور',
-                        style: TextStyle(
-                            color: Colors.green, fontWeight: FontWeight.bold))
-                    : ElevatedButton(
-                        onPressed: () => _markStationPassed(s),
-                        child: const Text('تسجيل عبور + إشعار'),
-                      ),
-              ),
-            );
-          }),
-        ],
-      ),
-    );
-  }
-}
+                      hintText: 'بم تفكر؟ اكتب منشورك هنا...')),
+              const SizedBox(height
